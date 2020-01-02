@@ -17,6 +17,7 @@ __global__ void cvo_dense_samp_cuda_forward_kernel(
     const torch::PackedTensorAccessor<bool,4,torch::RestrictPtrTraits,size_t> grid_valid,
     const int neighbor_range, 
     const float ell,
+    const bool ignore_ib, 
     torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> y) {
 
   const auto N = pts.size(2);
@@ -34,7 +35,13 @@ __global__ void cvo_dense_samp_cuda_forward_kernel(
   if (in < N ){
     const int u = pts[0][0][in];
     const int v = pts[0][1][in];
-    const int ib = pts[0][2][in];
+    int ib;
+    if (ignore_ib){
+      ib = 0;
+    }
+    else{
+      ib = pts[0][2][in];
+    }
     if (u+innw >= 0 && u+innw < W && v+innh >= 0 && v+innh < H){
       if (grid_valid[ib][0][v+innh][u+innw] > 0){
         for (int ic = 0; ic < C; ic++){
@@ -60,6 +67,7 @@ __global__ void cvo_dense_samp_cuda_backward_kernel_dx(
   const torch::PackedTensorAccessor<bool,4,torch::RestrictPtrTraits,size_t> grid_valid,
   const int neighbor_range, 
   const float ell, 
+  const bool ignore_ib, 
   const int inn) {
   // dx1: 1*C*N
   // dx2: B*C*H*W
@@ -82,7 +90,13 @@ __global__ void cvo_dense_samp_cuda_backward_kernel_dx(
     if (in < N ){
       const int u = pts[0][0][in];
       const int v = pts[0][1][in];
-      const int ib = pts[0][2][in];
+      int ib;
+      if (ignore_ib){
+        ib = 0;
+      }
+      else{
+        ib = pts[0][2][in];
+      }
       if (u+innw >= 0 && u+innw < W && v+innh >= 0 && v+innh < H){
         if (grid_valid[ib][0][v+innh][u+innw] > 0){
           dx1[0][blockIdx.y][in] += dy[0][inn][in] * y[0][inn][in] * (grid_source[ib][blockIdx.y][v+innh][u+innw] - pts_info[0][blockIdx.y][in]) / (ell*ell);
@@ -102,7 +116,8 @@ torch::Tensor cvo_dense_samp_cuda_forward(
     torch::Tensor grid_source, 
     torch::Tensor grid_valid, 
     int neighbor_range,
-    float ell
+    float ell, 
+    bool ignore_ib
     ) {
     // pts: 1*2*N, pts_info: 1*C*N, grid_source: B*C*H*W (C could be xyz, rgb, ...), 
     // grid_valid: B*1*H*W, neighbor_range: int
@@ -138,6 +153,7 @@ torch::Tensor cvo_dense_samp_cuda_forward(
       grid_valid.packed_accessor<bool,4,torch::RestrictPtrTraits,size_t>(),
       neighbor_range, 
       ell,
+      ignore_ib, 
       y.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>());
   }));
   cudaDeviceSynchronize();
@@ -154,7 +170,8 @@ std::vector<torch::Tensor> cvo_dense_samp_cuda_backward(
     torch::Tensor grid_source, 
     torch::Tensor grid_valid, 
     int neighbor_range,
-    float ell
+    float ell, 
+    bool ignore_ib
     ) {
 
   // dy: 1*NN*N
@@ -189,6 +206,7 @@ std::vector<torch::Tensor> cvo_dense_samp_cuda_backward(
         grid_valid.packed_accessor<bool,4,torch::RestrictPtrTraits,size_t>(),
         neighbor_range, 
         ell, 
+        ignore_ib, 
         inn);
     }));
     cudaDeviceSynchronize();  
