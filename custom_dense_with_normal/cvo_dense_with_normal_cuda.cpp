@@ -15,13 +15,14 @@ torch::Tensor cvo_dense_with_normal_cuda_forward(
     torch::Tensor grid_nres, 
     int neighbor_range, 
     float ell, 
+    float mag_max,
+    float mag_min,
     bool ignore_ib, 
     bool norm_in_dist
     );
 
 std::vector<torch::Tensor> cvo_dense_with_normal_cuda_backward(
     torch::Tensor dy, 
-    torch::Tensor y, 
     torch::Tensor pts,
     torch::Tensor pts_info, 
     torch::Tensor grid_source, 
@@ -32,6 +33,8 @@ std::vector<torch::Tensor> cvo_dense_with_normal_cuda_backward(
     torch::Tensor grid_nres, 
     int neighbor_range, 
     float ell,
+    float mag_max,
+    float mag_min,
     bool ignore_ib, 
     bool norm_in_dist);
 
@@ -53,6 +56,8 @@ torch::Tensor cvo_dense_with_normal_forward(
     torch::Tensor grid_nres, 
     int neighbor_range, 
     float ell,
+    float mag_max,
+    float mag_min,
     bool ignore_ib, 
     bool norm_in_dist) {
   CHECK_INPUT(pts);
@@ -64,12 +69,11 @@ torch::Tensor cvo_dense_with_normal_forward(
   CHECK_INPUT(pts_nres);
   CHECK_INPUT(grid_nres);
 
-  return cvo_dense_with_normal_cuda_forward(pts, pts_info, grid_source, grid_valid, pts_normal, grid_normal, pts_nres, grid_nres, neighbor_range, ell, ignore_ib, norm_in_dist);
+  return cvo_dense_with_normal_cuda_forward(pts, pts_info, grid_source, grid_valid, pts_normal, grid_normal, pts_nres, grid_nres, neighbor_range, ell, mag_max, mag_min, ignore_ib, norm_in_dist);
 }
 
 std::vector<torch::Tensor> cvo_dense_with_normal_backward(
     torch::Tensor dy, 
-    torch::Tensor y, 
     torch::Tensor pts,
     torch::Tensor pts_info, 
     torch::Tensor grid_source, 
@@ -80,6 +84,8 @@ std::vector<torch::Tensor> cvo_dense_with_normal_backward(
     torch::Tensor grid_nres, 
     int neighbor_range, 
     float ell,
+    float mag_max,
+    float mag_min,
     bool ignore_ib, 
     bool norm_in_dist) {
   CHECK_INPUT(dy);
@@ -92,7 +98,7 @@ std::vector<torch::Tensor> cvo_dense_with_normal_backward(
   CHECK_INPUT(pts_nres);
   CHECK_INPUT(grid_nres);
 
-  return cvo_dense_with_normal_cuda_backward(dy, y, pts, pts_info, grid_source, grid_valid, pts_normal, grid_normal, pts_nres, grid_nres, neighbor_range, ell, ignore_ib, norm_in_dist);
+  return cvo_dense_with_normal_cuda_backward(dy, pts, pts_info, grid_source, grid_valid, pts_normal, grid_normal, pts_nres, grid_nres, neighbor_range, ell, mag_max, mag_min, ignore_ib, norm_in_dist);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

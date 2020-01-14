@@ -21,6 +21,8 @@ __global__ void cvo_dense_with_normal_cuda_forward_kernel(
     const torch::PackedTensorAccessor<scalar_t,4,torch::RestrictPtrTraits,size_t> grid_nres,
     const int neighbor_range, 
     const float ell,
+    const float mag_max,
+    const float mag_min,
     const bool ignore_ib, 
     const bool norm_in_dist, 
     torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> y) {
@@ -52,23 +54,36 @@ __global__ void cvo_dense_with_normal_cuda_forward_kernel(
       if (grid_valid[ib][0][v+innh][u+innw] > 0){
 
         if (norm_in_dist){ // TODO: this part is not ready yet
-          float dx = 0;
+          // float dx = 0;
+          // float dx_n_pts = 0;
+          // float dx_n_grid = 0;
+          // float dx_c = 0;
+          // for (int ic = 0; ic < C; ic++){
+          //   dx_c = pts_info[0][ic][in] - grid_source[ib][ic][v+innh][u+innw];
+          //   dx += dx_c * dx_c;
+          //   dx_n_pts += dx_c * pts_normal[0][ic][in];
+          //   dx_n_grid += dx_c * grid_normal[ib][ic][v+innh][u+innw];
+          //   // y[0][blockIdx.y][in] += (pts_info[0][ic][in] - grid_source[ib][ic][v+innh][u+innw]) * (pts_info[0][ic][in] - grid_source[ib][ic][v+innh][u+innw]);
+          // }
+          // dx_n_pts = dx_n_pts * dx_n_pts;
+          // dx_n_grid = dx_n_grid * dx_n_grid;
+          // float alpha = pts_nres[0][0][in];
+          // float d = dx_n_pts + alpha * (dx - dx_n_pts);
+          // y[0][blockIdx.y][in] = 1/alpha * exp(- sqrt(d)/ell);
+          // // y[0][blockIdx.y][in] =  exp( - y[0][blockIdx.y][in] / (2*ell*ell) ) ;
+
+          float ntn = 0;
           float dx_n_pts = 0;
           float dx_n_grid = 0;
-          float dx_c = 0;
           for (int ic = 0; ic < C; ic++){
-            dx_c = pts_info[0][ic][in] - grid_source[ib][ic][v+innh][u+innw];
-            dx += dx_c * dx_c;
-            dx_n_pts += dx_c * pts_normal[0][ic][in];
-            dx_n_grid += dx_c * grid_normal[ib][ic][v+innh][u+innw];
-            // y[0][blockIdx.y][in] += (pts_info[0][ic][in] - grid_source[ib][ic][v+innh][u+innw]) * (pts_info[0][ic][in] - grid_source[ib][ic][v+innh][u+innw]);
+            ntn += pts_normal[0][ic][in] * grid_normal[ib][ic][v+innh][u+innw];
+            dx_n_pts += (pts_info[0][ic][in] - grid_source[ib][ic][v+innh][u+innw]) * pts_normal[0][ic][in];
+            dx_n_grid += (pts_info[0][ic][in] - grid_source[ib][ic][v+innh][u+innw]) * grid_normal[ib][ic][v+innh][u+innw];
           }
-          dx_n_pts = dx_n_pts * dx_n_pts;
-          dx_n_grid = dx_n_grid * dx_n_grid;
-          float alpha = pts_nres[0][0][in];
-          float d = dx_n_pts + alpha * (dx - dx_n_pts);
-          y[0][blockIdx.y][in] = 1/alpha * exp(- sqrt(d)/ell);
-          // y[0][blockIdx.y][in] =  exp( - y[0][blockIdx.y][in] / (2*ell*ell) ) ;
+          float res = pts_nres[0][0][in] + grid_nres[ib][0][v+innh][u+innw];
+          float alpha = 2 * mag_min / (2*mag_min/mag_max + res);
+          float dx_n = max(fabs(dx_n_grid), fabs(dx_n_pts));
+          y[0][blockIdx.y][in] = (fabs(ntn)+1e-7) * alpha * exp(- (dx_n+1e-7)/ell);
         }
         else{
           float dx = 0;
@@ -77,9 +92,9 @@ __global__ void cvo_dense_with_normal_cuda_forward_kernel(
             dx += (pts_info[0][ic][in] - grid_source[ib][ic][v+innh][u+innw]) * (pts_info[0][ic][in] - grid_source[ib][ic][v+innh][u+innw]);
             ntn += pts_normal[0][ic][in] * grid_normal[ib][ic][v+innh][u+innw];
           }
-          ntn = fabs(ntn);
-          float alpha = pts_nres[0][0][in] + grid_nres[ib][0][v+innh][u+innw];
-          y[0][blockIdx.y][in] = ntn/alpha * exp(- sqrt(dx)/ell);
+          float res = pts_nres[0][0][in] + grid_nres[ib][0][v+innh][u+innw];
+          float alpha = 2 * mag_min / (2*mag_min/mag_max + res);
+          y[0][blockIdx.y][in] = (fabs(ntn)+1e-7) * alpha * exp(- (sqrt(dx)+1e-7)/ell);
 
         }
         
@@ -99,7 +114,6 @@ __global__ void cvo_dense_with_normal_cuda_backward_kernel_dx(
   torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> dr1,
   torch::PackedTensorAccessor<scalar_t,4,torch::RestrictPtrTraits,size_t> dr2,
   const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> dy, 
-  const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> y, 
   const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> pts,
   const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> pts_info,
   const torch::PackedTensorAccessor<scalar_t,4,torch::RestrictPtrTraits,size_t> grid_source,
@@ -110,6 +124,8 @@ __global__ void cvo_dense_with_normal_cuda_backward_kernel_dx(
   const torch::PackedTensorAccessor<scalar_t,4,torch::RestrictPtrTraits,size_t> grid_nres,
   const int neighbor_range, 
   const float ell, 
+  const float mag_max,
+  const float mag_min,
   const bool ignore_ib, 
   const bool norm_in_dist, 
   const int inn) {
@@ -145,6 +161,59 @@ __global__ void cvo_dense_with_normal_cuda_backward_kernel_dx(
         if (grid_valid[ib][0][v+innh][u+innw] > 0){
           if (norm_in_dist){
 
+            float dx_n_pts = 0;
+            float dx_n_grid = 0;
+            float ntn = 0;
+            for (int ic = 0; ic < C; ic++){
+              dx_n_pts += (pts_info[0][ic][in] - grid_source[ib][ic][v+innh][u+innw]) * pts_normal[0][ic][in];
+              dx_n_grid += (pts_info[0][ic][in] - grid_source[ib][ic][v+innh][u+innw]) * grid_normal[ib][ic][v+innh][u+innw];
+              ntn += pts_normal[0][ic][in] * grid_normal[ib][ic][v+innh][u+innw];
+            }
+            bool neg_ntn = ntn < 0;
+            float sign_ntn = 1;
+            if (neg_ntn){
+              ntn = -ntn;
+              sign_ntn = -1;
+            }
+            bool neg_n_pts = dx_n_pts < 0;
+            float sign_n_pts = 1;
+            if (neg_n_pts){
+              dx_n_pts = -dx_n_pts;
+              sign_n_pts = -1;
+            }
+            bool neg_n_grid = dx_n_grid < 0;
+            float sign_n_grid = 1;
+            if (neg_n_grid){
+              dx_n_grid = -dx_n_grid;
+              sign_n_grid = -1;
+            }
+            bool max_at_pts;
+            float dx_n;
+            if (dx_n_pts > dx_n_grid){
+              max_at_pts = true;
+              dx_n = dx_n_pts;
+            }
+            else{
+              max_at_pts = false;
+              dx_n = dx_n_grid;
+            }
+            float res = pts_nres[0][0][in] + grid_nres[ib][0][v+innh][u+innw];
+            float alpha = 2 * mag_min / (2*mag_min/mag_max + res);
+            float y_cur = (ntn+1e-7) * alpha * exp(- (dx_n+1e-7)/ell);
+            for (int ic = 0; ic < C; ic++){
+              if (max_at_pts){
+                dx1[0][ic][in] -= dy[0][inn][in] * y_cur * pts_normal[0][ic][in] / ell * sign_n_pts ;
+                dx2[ib][ic][v+innh][u+innw] += dy[0][inn][in] * y_cur * pts_normal[0][ic][in] / ell * sign_n_pts ;
+              }
+              else{
+                dx1[0][ic][in] -= dy[0][inn][in] * y_cur * grid_normal[ib][ic][v+innh][u+innw] / ell * sign_n_grid ;
+                dx2[ib][ic][v+innh][u+innw] += dy[0][inn][in] * y_cur * grid_normal[ib][ic][v+innh][u+innw] / ell * sign_n_grid ;
+              }
+              dn1[0][ic][in] += dy[0][inn][in] * sign_ntn * grid_normal[ib][ic][v+innh][u+innw] * y_cur / (ntn+1e-7);
+              dn2[ib][ic][v+innh][u+innw] += dy[0][inn][in] * sign_ntn * pts_normal[0][ic][in] * y_cur / (ntn+1e-7);
+              dr1[0][0][in] -= dy[0][inn][in] * y_cur / (2*mag_min/mag_max + res);
+              dr2[ib][0][v+innh][u+innw] -= dy[0][inn][in] * y_cur / (2*mag_min/mag_max + res);
+            }
           }
           else{
             float dx = 0;
@@ -160,14 +229,16 @@ __global__ void cvo_dense_with_normal_cuda_backward_kernel_dx(
               ntn = -ntn;
               sign_ntn = -1;
             }
-            float alpha = pts_nres[0][0][in] + grid_nres[ib][0][v+innh][u+innw];
+            float res = pts_nres[0][0][in] + grid_nres[ib][0][v+innh][u+innw];
+            float alpha = 2 * mag_min / (2*mag_min/mag_max + res);
+            float y_cur = (ntn+1e-7) * alpha * exp(- (dx+1e-7)/ell);
             for (int ic = 0; ic < C; ic++){
-              dx1[0][ic][in] += dy[0][inn][in] * y[0][inn][in] * (grid_source[ib][ic][v+innh][u+innw] - pts_info[0][ic][in]) / ell / dx;
-              dx2[ib][ic][v+innh][u+innw] -= dy[0][inn][in] * y[0][inn][in] * (grid_source[ib][ic][v+innh][u+innw] - pts_info[0][ic][in]) / ell / dx;
-              dn1[0][ic][in] += dy[0][inn][in] * sign_ntn * grid_normal[ib][ic][v+innh][u+innw] * y[0][inn][in] / ntn;
-              dn2[ib][ic][v+innh][u+innw] += dy[0][inn][in] * sign_ntn * pts_normal[0][ic][in] * y[0][inn][in] / ntn;
-              dr1[0][0][in] -= dy[0][inn][in] * y[0][inn][in] / alpha;
-              dr2[ib][0][v+innh][u+innw] -= dy[0][inn][in] * y[0][inn][in] / alpha;
+              dx1[0][ic][in] += dy[0][inn][in] * y_cur * (grid_source[ib][ic][v+innh][u+innw] - pts_info[0][ic][in]) / ell / (dx+1e-7);
+              dx2[ib][ic][v+innh][u+innw] -= dy[0][inn][in] * y_cur * (grid_source[ib][ic][v+innh][u+innw] - pts_info[0][ic][in]) / ell / (dx+1e-7);
+              dn1[0][ic][in] += dy[0][inn][in] * sign_ntn * grid_normal[ib][ic][v+innh][u+innw] * y_cur / (ntn+1e-7);
+              dn2[ib][ic][v+innh][u+innw] += dy[0][inn][in] * sign_ntn * pts_normal[0][ic][in] * y_cur / (ntn+1e-7);
+              dr1[0][0][in] -= dy[0][inn][in] * y_cur / (2*mag_min/mag_max + res);
+              dr2[ib][0][v+innh][u+innw] -= dy[0][inn][in] * y_cur / (2*mag_min/mag_max + res);
             }
           }
           // dx1[0][blockIdx.y][in] += dy[0][inn][in] * y[0][inn][in] * (grid_source[ib][blockIdx.y][v+innh][u+innw] - pts_info[0][blockIdx.y][in]) / (ell*ell);
@@ -192,6 +263,8 @@ torch::Tensor cvo_dense_with_normal_cuda_forward(
     torch::Tensor grid_nres, 
     int neighbor_range,
     float ell, 
+    float mag_max,
+    float mag_min,
     bool ignore_ib, 
     bool norm_in_dist
     ) {
@@ -233,6 +306,8 @@ torch::Tensor cvo_dense_with_normal_cuda_forward(
       grid_nres.packed_accessor<scalar_t,4,torch::RestrictPtrTraits,size_t>(),
       neighbor_range, 
       ell,
+      mag_max,
+      mag_min,
       ignore_ib, 
       norm_in_dist, 
       y.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>());
@@ -245,7 +320,6 @@ torch::Tensor cvo_dense_with_normal_cuda_forward(
 
 std::vector<torch::Tensor> cvo_dense_with_normal_cuda_backward(
     torch::Tensor dy, 
-    torch::Tensor y, 
     torch::Tensor pts,
     torch::Tensor pts_info, 
     torch::Tensor grid_source, 
@@ -256,6 +330,8 @@ std::vector<torch::Tensor> cvo_dense_with_normal_cuda_backward(
     torch::Tensor grid_nres, 
     int neighbor_range,
     float ell, 
+    float mag_max,
+    float mag_min,
     bool ignore_ib, 
     bool norm_in_dist
     ) {
@@ -276,7 +352,7 @@ std::vector<torch::Tensor> cvo_dense_with_normal_cuda_backward(
   auto dr1 = torch::zeros({1, 1, N}, pts_info.device());
   auto dr2 = torch::zeros({B, 1, H, W}, pts_info.device());
 
-  const int threads = 1024;
+  const int threads = 512;
 
   int device_id = pts_info.device().index();
   cudaSetDevice(device_id);
@@ -294,7 +370,6 @@ std::vector<torch::Tensor> cvo_dense_with_normal_cuda_backward(
         dr1.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
         dr2.packed_accessor<scalar_t,4,torch::RestrictPtrTraits,size_t>(),
         dy.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(), 
-        y.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(), 
         pts.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
         pts_info.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
         grid_source.packed_accessor<scalar_t,4,torch::RestrictPtrTraits,size_t>(),
@@ -305,6 +380,8 @@ std::vector<torch::Tensor> cvo_dense_with_normal_cuda_backward(
         grid_nres.packed_accessor<scalar_t,4,torch::RestrictPtrTraits,size_t>(),
         neighbor_range, 
         ell, 
+        mag_max,
+        mag_min,
         ignore_ib, 
         norm_in_dist, 
         inn);
