@@ -4,7 +4,7 @@
 
 // CUDA forward declarations
 
-torch::Tensor cvo_dense_normal_cuda_forward(
+std::vector<torch::Tensor> cvo_dense_normal_cuda_forward(
     torch::Tensor pts,
     torch::Tensor grid_source, 
     torch::Tensor grid_valid, 
@@ -27,7 +27,7 @@ std::vector<torch::Tensor> cvo_dense_normal_cuda_backward(
 #define CHECK_CONTIGUOUS(x) AT_ASSERTM(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
-torch::Tensor cvo_dense_normal_forward(
+std::vector<torch::Tensor> cvo_dense_normal_forward(
     torch::Tensor pts,
     torch::Tensor grid_source, 
     torch::Tensor grid_valid, 

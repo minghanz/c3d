@@ -18,7 +18,7 @@ __global__ void cvo_dense_normal_cuda_forward_kernel(
     const bool ignore_ib, 
     torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> y, 
     torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> pnorm, 
-    torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> ioffs) {
+    torch::PackedTensorAccessor<int,3,torch::RestrictPtrTraits,size_t> ioffs) {
 
   const auto N = pts.size(2);
   const auto C = grid_source.size(1);
@@ -121,7 +121,7 @@ __global__ void cvo_dense_normal_cuda_backward_kernel_dx(
   torch::PackedTensorAccessor<scalar_t,4,torch::RestrictPtrTraits,size_t> dgrid,
   const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> dy, 
   const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> dpnorm, 
-  const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> ioffs, 
+  const torch::PackedTensorAccessor<int,3,torch::RestrictPtrTraits,size_t> ioffs, 
   const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> pts,
   const torch::PackedTensorAccessor<scalar_t,4,torch::RestrictPtrTraits,size_t> grid_source,
   const bool ignore_ib, 
@@ -264,7 +264,7 @@ template <typename scalar_t>
 __global__ void cvo_dense_normal_cuda_backward_kernel_dx_m(
   const torch::PackedTensorAccessor<scalar_t,4,torch::RestrictPtrTraits,size_t> dgrid,
   torch::PackedTensorAccessor<scalar_t,4,torch::RestrictPtrTraits,size_t> dgrid_m,
-  const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> ioffs, 
+  const torch::PackedTensorAccessor<int,3,torch::RestrictPtrTraits,size_t> ioffs, 
   const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> pts,
   const torch::PackedTensorAccessor<scalar_t,4,torch::RestrictPtrTraits,size_t> grid_source,
   const bool ignore_ib) {
@@ -354,7 +354,9 @@ std::vector<torch::Tensor> cvo_dense_normal_cuda_forward(
   auto options = torch::TensorOptions().dtype(grid_source.dtype()).layout(torch::kStrided).device(grid_source.device()).requires_grad(true);
   auto y = torch::zeros({4, C, N}, options);
   auto pnorm = torch::zeros({4, 2, N}, options);
-  auto ioffs = torch::zeros({4, 2, N}, options);
+
+  auto options_int = torch::TensorOptions().dtype(torch::kInt32).layout(torch::kStrided).device(grid_source.device()).requires_grad(false);
+  auto ioffs = torch::zeros({4, 2, N}, options_int);
 
   // printf("x1 device: %d \n", x1.device().type()); 
   // printf("x1 index: %d \n", x1.device().index()); 
@@ -378,7 +380,7 @@ std::vector<torch::Tensor> cvo_dense_normal_cuda_forward(
       ignore_ib, 
       y.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
       pnorm.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
-      ioffs.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>());
+      ioffs.packed_accessor<int,3,torch::RestrictPtrTraits,size_t>());
   }));
   cudaDeviceSynchronize();
 
@@ -417,7 +419,7 @@ torch::Tensor cvo_dense_normal_cuda_backward(
         dgrid.packed_accessor<scalar_t,4,torch::RestrictPtrTraits,size_t>(),
         dy.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(), 
         dpnorm.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(), 
-        ioffs.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(), 
+        ioffs.packed_accessor<int,3,torch::RestrictPtrTraits,size_t>(), 
         pts.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
         grid_source.packed_accessor<scalar_t,4,torch::RestrictPtrTraits,size_t>(),
         ignore_ib, 
@@ -432,7 +434,7 @@ torch::Tensor cvo_dense_normal_cuda_backward(
     cvo_dense_normal_cuda_backward_kernel_dx_m<scalar_t><<<blocks_dx12, threads>>>(
       dgrid.packed_accessor<scalar_t,4,torch::RestrictPtrTraits,size_t>(),
       dgrid_m.packed_accessor<scalar_t,4,torch::RestrictPtrTraits,size_t>(),
-      ioffs.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(), 
+      ioffs.packed_accessor<int,3,torch::RestrictPtrTraits,size_t>(), 
       pts.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
       grid_source.packed_accessor<scalar_t,4,torch::RestrictPtrTraits,size_t>(),
       ignore_ib);
