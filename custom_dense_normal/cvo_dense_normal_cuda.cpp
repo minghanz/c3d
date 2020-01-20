@@ -12,7 +12,7 @@ std::vector<torch::Tensor> cvo_dense_normal_cuda_forward(
     bool ignore_ib
     );
 
-std::vector<torch::Tensor> cvo_dense_normal_cuda_backward(
+torch::Tensor cvo_dense_normal_cuda_backward(
     torch::Tensor dy, 
     torch::Tensor dpnorm, 
     torch::Tensor ioffs,
@@ -40,7 +40,7 @@ std::vector<torch::Tensor> cvo_dense_normal_forward(
   return cvo_dense_normal_cuda_forward(pts, grid_source, grid_valid, neighbor_range, ignore_ib);
 }
 
-std::vector<torch::Tensor> cvo_dense_normal_backward(
+torch::Tensor cvo_dense_normal_backward(
     torch::Tensor dy, 
     torch::Tensor dpnorm, 
     torch::Tensor ioffs,
