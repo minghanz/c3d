@@ -18,7 +18,8 @@ torch::Tensor cvo_dense_with_normal_cuda_forward(
     float mag_max,
     float mag_min,
     bool ignore_ib, 
-    bool norm_in_dist
+    bool norm_in_dist, 
+    float ell_basedist
     );
 
 std::vector<torch::Tensor> cvo_dense_with_normal_cuda_backward(
@@ -36,7 +37,8 @@ std::vector<torch::Tensor> cvo_dense_with_normal_cuda_backward(
     float mag_max,
     float mag_min,
     bool ignore_ib, 
-    bool norm_in_dist);
+    bool norm_in_dist, 
+    float ell_basedist);
 
 // C++ interface
 
@@ -59,7 +61,8 @@ torch::Tensor cvo_dense_with_normal_forward(
     float mag_max,
     float mag_min,
     bool ignore_ib, 
-    bool norm_in_dist) {
+    bool norm_in_dist, 
+    float ell_basedist) {
   CHECK_INPUT(pts);
   CHECK_INPUT(pts_info);
   CHECK_INPUT(grid_source);
@@ -69,7 +72,7 @@ torch::Tensor cvo_dense_with_normal_forward(
   CHECK_INPUT(pts_nres);
   CHECK_INPUT(grid_nres);
 
-  return cvo_dense_with_normal_cuda_forward(pts, pts_info, grid_source, grid_valid, pts_normal, grid_normal, pts_nres, grid_nres, neighbor_range, ell, mag_max, mag_min, ignore_ib, norm_in_dist);
+  return cvo_dense_with_normal_cuda_forward(pts, pts_info, grid_source, grid_valid, pts_normal, grid_normal, pts_nres, grid_nres, neighbor_range, ell, mag_max, mag_min, ignore_ib, norm_in_dist, ell_basedist);
 }
 
 std::vector<torch::Tensor> cvo_dense_with_normal_backward(
@@ -87,7 +90,8 @@ std::vector<torch::Tensor> cvo_dense_with_normal_backward(
     float mag_max,
     float mag_min,
     bool ignore_ib, 
-    bool norm_in_dist) {
+    bool norm_in_dist, 
+    float ell_basedist) {
   CHECK_INPUT(dy);
   CHECK_INPUT(pts);
   CHECK_INPUT(pts_info);
@@ -98,7 +102,7 @@ std::vector<torch::Tensor> cvo_dense_with_normal_backward(
   CHECK_INPUT(pts_nres);
   CHECK_INPUT(grid_nres);
 
-  return cvo_dense_with_normal_cuda_backward(dy, pts, pts_info, grid_source, grid_valid, pts_normal, grid_normal, pts_nres, grid_nres, neighbor_range, ell, mag_max, mag_min, ignore_ib, norm_in_dist);
+  return cvo_dense_with_normal_cuda_backward(dy, pts, pts_info, grid_source, grid_valid, pts_normal, grid_normal, pts_nres, grid_nres, neighbor_range, ell, mag_max, mag_min, ignore_ib, norm_in_dist, ell_basedist);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

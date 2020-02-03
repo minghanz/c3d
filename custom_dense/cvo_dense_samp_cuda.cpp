@@ -11,19 +11,22 @@ torch::Tensor cvo_dense_samp_cuda_forward(
     torch::Tensor grid_valid, 
     int neighbor_range, 
     float ell, 
-    bool ignore_ib
+    bool ignore_ib, 
+    bool sqr,
+    float ell_basedist
     );
 
 std::vector<torch::Tensor> cvo_dense_samp_cuda_backward(
     torch::Tensor dy, 
-    torch::Tensor y, 
     torch::Tensor pts,
     torch::Tensor pts_info, 
     torch::Tensor grid_source, 
     torch::Tensor grid_valid, 
     int neighbor_range, 
     float ell,
-    bool ignore_ib);
+    bool ignore_ib, 
+    bool sqr,
+    float ell_basedist);
 
 // C++ interface
 
@@ -39,32 +42,35 @@ torch::Tensor cvo_dense_samp_forward(
     torch::Tensor grid_valid, 
     int neighbor_range, 
     float ell,
-    bool ignore_ib) {
+    bool ignore_ib, 
+    bool sqr,
+    float ell_basedist) {
   CHECK_INPUT(pts);
   CHECK_INPUT(pts_info);
   CHECK_INPUT(grid_source);
   CHECK_INPUT(grid_valid);
 
-  return cvo_dense_samp_cuda_forward(pts, pts_info, grid_source, grid_valid, neighbor_range, ell, ignore_ib);
+  return cvo_dense_samp_cuda_forward(pts, pts_info, grid_source, grid_valid, neighbor_range, ell, ignore_ib, sqr, ell_basedist);
 }
 
 std::vector<torch::Tensor> cvo_dense_samp_backward(
     torch::Tensor dy, 
-    torch::Tensor y, 
     torch::Tensor pts,
     torch::Tensor pts_info, 
     torch::Tensor grid_source, 
     torch::Tensor grid_valid, 
     int neighbor_range, 
     float ell,
-    bool ignore_ib) {
+    bool ignore_ib,
+    bool sqr,
+    float ell_basedist) {
   CHECK_INPUT(dy);
   CHECK_INPUT(pts);
   CHECK_INPUT(pts_info);
   CHECK_INPUT(grid_source);
   CHECK_INPUT(grid_valid);
 
-  return cvo_dense_samp_cuda_backward(dy, y, pts, pts_info, grid_source, grid_valid, neighbor_range, ell, ignore_ib);
+  return cvo_dense_samp_cuda_backward(dy, pts, pts_info, grid_source, grid_valid, neighbor_range, ell, ignore_ib, sqr, ell_basedist);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
