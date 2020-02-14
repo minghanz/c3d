@@ -26,7 +26,8 @@ __global__ void cvo_dense_with_normal_cuda_forward_kernel(
     const bool ignore_ib, 
     const bool norm_in_dist, 
     const float ell_basedist,
-    torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> y) {
+    torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> y, 
+    torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> nmal_kern_y) {
 
   const auto N = pts.size(2);
   const auto C = pts_info.size(1);
@@ -94,6 +95,7 @@ __global__ void cvo_dense_with_normal_cuda_forward_kernel(
           float alpha = 2 * mag_min / (2*mag_min/mag_max + res);
           float dx_n = max(fabs(dx_n_grid), fabs(dx_n_pts));
           y[0][blockIdx.y][in] = (fabs(ntn)+1e-8) * alpha * exp(- dx_n/ell_apply);
+          nmal_kern_y[0][blockIdx.y][in] = (fabs(ntn)+1e-8) * alpha;
         }
         else{
           float dx = 0;
@@ -105,7 +107,7 @@ __global__ void cvo_dense_with_normal_cuda_forward_kernel(
           float res = pts_nres[0][0][in] + grid_nres[ib][0][v+innh][u+innw];
           float alpha = 2 * mag_min / (2*mag_min/mag_max + res);
           y[0][blockIdx.y][in] = (fabs(ntn)+1e-8) * alpha * exp(- sqrt(dx+1e-8)/ell_apply);
-
+          nmal_kern_y[0][blockIdx.y][in] = (fabs(ntn)+1e-8) * alpha;
         }
         
       }
@@ -273,7 +275,7 @@ __global__ void cvo_dense_with_normal_cuda_backward_kernel_dx(
 
 } // namespace
 
-torch::Tensor cvo_dense_with_normal_cuda_forward(
+std::vector<torch::Tensor> cvo_dense_with_normal_cuda_forward(
     torch::Tensor pts,
     torch::Tensor pts_info, 
     torch::Tensor grid_source, 
@@ -288,7 +290,8 @@ torch::Tensor cvo_dense_with_normal_cuda_forward(
     float mag_min,
     bool ignore_ib, 
     bool norm_in_dist,
-    float ell_basedist
+    float ell_basedist, 
+    bool return_normal_kernel
     ) {
     // pts: 1*2*N, pts_info: 1*C*N, grid_source: B*C*H*W (C could be xyz, rgb, ...), 
     // grid_valid: B*1*H*W, neighbor_range: int
@@ -302,6 +305,9 @@ torch::Tensor cvo_dense_with_normal_cuda_forward(
 
   auto options = torch::TensorOptions().dtype(pts_info.dtype()).layout(torch::kStrided).device(pts_info.device()).requires_grad(true);
   auto y = torch::zeros({1, NN, N}, options);
+
+  // nmal_kern_y is for debugging the normal kernel
+  auto nmal_kern_y = torch::zeros({1, NN, N}, options);
 
   // printf("x1 device: %d \n", x1.device().type()); 
   // printf("x1 index: %d \n", x1.device().index()); 
@@ -333,12 +339,18 @@ torch::Tensor cvo_dense_with_normal_cuda_forward(
       ignore_ib, 
       norm_in_dist, 
       ell_basedist,
-      y.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>());
+      y.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(), 
+      nmal_kern_y.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>() );
   }));
   cudaDeviceSynchronize();
 
-
-  return y;
+  if (return_normal_kernel){
+    return {y, nmal_kern_y};
+  }
+  else{
+    return {y};
+  }
+  // return y;
 }
 
 std::vector<torch::Tensor> cvo_dense_with_normal_cuda_backward(
