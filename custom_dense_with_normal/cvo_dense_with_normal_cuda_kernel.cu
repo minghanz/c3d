@@ -25,6 +25,7 @@ __global__ void cvo_dense_with_normal_cuda_forward_kernel(
     const float mag_min,
     const bool ignore_ib, 
     const bool norm_in_dist, 
+    const bool neg_nkern_to_zero, 
     const float ell_basedist,
     torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> y, 
     torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> nmal_kern_y) {
@@ -94,8 +95,14 @@ __global__ void cvo_dense_with_normal_cuda_forward_kernel(
           float res = pts_nres[0][0][in] + grid_nres[ib][0][v+innh][u+innw];
           float alpha = 2 * mag_min / (2*mag_min/mag_max + res);
           float dx_n = max(fabs(dx_n_grid), fabs(dx_n_pts));
-          y[0][blockIdx.y][in] = (fabs(ntn)+1e-8) * alpha * exp(- dx_n/ell_apply);
-          nmal_kern_y[0][blockIdx.y][in] = (fabs(ntn)+1e-8) * alpha;
+          if (neg_nkern_to_zero){
+            y[0][blockIdx.y][in] = max(ntn, float(0)) * alpha * exp(- dx_n/ell_apply);
+            nmal_kern_y[0][blockIdx.y][in] = max(ntn, float(0)) * alpha;
+          }
+          else{
+            y[0][blockIdx.y][in] = (fabs(ntn)+1e-8) * alpha * exp(- dx_n/ell_apply);
+            nmal_kern_y[0][blockIdx.y][in] = (fabs(ntn)+1e-8) * alpha;
+          }
         }
         else{
           float dx = 0;
@@ -106,8 +113,14 @@ __global__ void cvo_dense_with_normal_cuda_forward_kernel(
           }
           float res = pts_nres[0][0][in] + grid_nres[ib][0][v+innh][u+innw];
           float alpha = 2 * mag_min / (2*mag_min/mag_max + res);
-          y[0][blockIdx.y][in] = (fabs(ntn)+1e-8) * alpha * exp(- sqrt(dx+1e-8)/ell_apply);
-          nmal_kern_y[0][blockIdx.y][in] = (fabs(ntn)+1e-8) * alpha;
+          if (neg_nkern_to_zero){
+            y[0][blockIdx.y][in] = max(ntn, float(0)) * alpha * exp(- sqrt(dx+1e-8)/ell_apply);
+            nmal_kern_y[0][blockIdx.y][in] = max(ntn, float(0)) * alpha;
+          }
+          else{
+            y[0][blockIdx.y][in] = (fabs(ntn)+1e-8) * alpha * exp(- sqrt(dx+1e-8)/ell_apply);
+            nmal_kern_y[0][blockIdx.y][in] = (fabs(ntn)+1e-8) * alpha;
+          }
         }
         
       }
@@ -140,6 +153,7 @@ __global__ void cvo_dense_with_normal_cuda_backward_kernel_dx(
   const float mag_min,
   const bool ignore_ib, 
   const bool norm_in_dist, 
+  const bool neg_nkern_to_zero, 
   const float ell_basedist,
   const int inn) {
   // dx1: 1*C*N
@@ -198,45 +212,58 @@ __global__ void cvo_dense_with_normal_cuda_backward_kernel_dx(
               ntn = -ntn;
               sign_ntn = -1;
             }
-            bool neg_n_pts = dx_n_pts < 0;
-            float sign_n_pts = 1;
-            if (neg_n_pts){
-              dx_n_pts = -dx_n_pts;
-              sign_n_pts = -1;
-            }
-            bool neg_n_grid = dx_n_grid < 0;
-            float sign_n_grid = 1;
-            if (neg_n_grid){
-              dx_n_grid = -dx_n_grid;
-              sign_n_grid = -1;
-            }
-            bool max_at_pts;
-            float dx_n;
-            if (dx_n_pts > dx_n_grid){
-              max_at_pts = true;
-              dx_n = dx_n_pts;
+            if (neg_nkern_to_zero && neg_ntn){
+              for (int ic = 0; ic < C; ic++){
+                dx1[0][ic][in] = 0;
+                dx2[ib][ic][v+innh][u+innw] = 0;
+                dn1[0][ic][in] = 0;
+                dn2[ib][ic][v+innh][u+innw] = 0;
+                dr1[0][0][in] = 0;
+                dr2[ib][0][v+innh][u+innw] = 0;
+              }
             }
             else{
-              max_at_pts = false;
-              dx_n = dx_n_grid;
-            }
-            float res = pts_nres[0][0][in] + grid_nres[ib][0][v+innh][u+innw];
-            float alpha = 2 * mag_min / (2*mag_min/mag_max + res);
-            float y_cur = (ntn+1e-8) * alpha * exp(- dx_n/ell_apply);
-            for (int ic = 0; ic < C; ic++){
-              if (max_at_pts){
-                dx1[0][ic][in] -= dy[0][inn][in] * y_cur * pts_normal[0][ic][in] / ell_apply * sign_n_pts ;
-                dx2[ib][ic][v+innh][u+innw] += dy[0][inn][in] * y_cur * pts_normal[0][ic][in] / ell_apply * sign_n_pts ;
+              bool neg_n_pts = dx_n_pts < 0;
+              float sign_n_pts = 1;
+              if (neg_n_pts){
+                dx_n_pts = -dx_n_pts;
+                sign_n_pts = -1;
+              }
+              bool neg_n_grid = dx_n_grid < 0;
+              float sign_n_grid = 1;
+              if (neg_n_grid){
+                dx_n_grid = -dx_n_grid;
+                sign_n_grid = -1;
+              }
+              bool max_at_pts;
+              float dx_n;
+              if (dx_n_pts > dx_n_grid){
+                max_at_pts = true;
+                dx_n = dx_n_pts;
               }
               else{
-                dx1[0][ic][in] -= dy[0][inn][in] * y_cur * grid_normal[ib][ic][v+innh][u+innw] / ell_apply * sign_n_grid ;
-                dx2[ib][ic][v+innh][u+innw] += dy[0][inn][in] * y_cur * grid_normal[ib][ic][v+innh][u+innw] / ell_apply * sign_n_grid ;
+                max_at_pts = false;
+                dx_n = dx_n_grid;
               }
-              dn1[0][ic][in] += dy[0][inn][in] * sign_ntn * grid_normal[ib][ic][v+innh][u+innw] * y_cur / (ntn+1e-8);
-              dn2[ib][ic][v+innh][u+innw] += dy[0][inn][in] * sign_ntn * pts_normal[0][ic][in] * y_cur / (ntn+1e-8);
-              dr1[0][0][in] -= dy[0][inn][in] * y_cur / (2*mag_min/mag_max + res);
-              dr2[ib][0][v+innh][u+innw] -= dy[0][inn][in] * y_cur / (2*mag_min/mag_max + res);
+              float res = pts_nres[0][0][in] + grid_nres[ib][0][v+innh][u+innw];
+              float alpha = 2 * mag_min / (2*mag_min/mag_max + res);
+              float y_cur = (ntn+1e-8) * alpha * exp(- dx_n/ell_apply);
+              for (int ic = 0; ic < C; ic++){
+                if (max_at_pts){
+                  dx1[0][ic][in] -= dy[0][inn][in] * y_cur * pts_normal[0][ic][in] / ell_apply * sign_n_pts ;
+                  dx2[ib][ic][v+innh][u+innw] += dy[0][inn][in] * y_cur * pts_normal[0][ic][in] / ell_apply * sign_n_pts ;
+                }
+                else{
+                  dx1[0][ic][in] -= dy[0][inn][in] * y_cur * grid_normal[ib][ic][v+innh][u+innw] / ell_apply * sign_n_grid ;
+                  dx2[ib][ic][v+innh][u+innw] += dy[0][inn][in] * y_cur * grid_normal[ib][ic][v+innh][u+innw] / ell_apply * sign_n_grid ;
+                }
+                dn1[0][ic][in] += dy[0][inn][in] * sign_ntn * grid_normal[ib][ic][v+innh][u+innw] * y_cur / (ntn+1e-8);
+                dn2[ib][ic][v+innh][u+innw] += dy[0][inn][in] * sign_ntn * pts_normal[0][ic][in] * y_cur / (ntn+1e-8);
+                dr1[0][0][in] -= dy[0][inn][in] * y_cur / (2*mag_min/mag_max + res);
+                dr2[ib][0][v+innh][u+innw] -= dy[0][inn][in] * y_cur / (2*mag_min/mag_max + res);
+              }
             }
+            
           }
           else{
             float dx = 0;
@@ -252,17 +279,30 @@ __global__ void cvo_dense_with_normal_cuda_backward_kernel_dx(
               ntn = -ntn;
               sign_ntn = -1;
             }
-            float res = pts_nres[0][0][in] + grid_nres[ib][0][v+innh][u+innw];
-            float alpha = 2 * mag_min / (2*mag_min/mag_max + res);
-            float y_cur = (ntn+1e-8) * alpha * exp(- dx/ell_apply);
-            for (int ic = 0; ic < C; ic++){
-              dx1[0][ic][in] += dy[0][inn][in] * y_cur * (grid_source[ib][ic][v+innh][u+innw] - pts_info[0][ic][in]) / ell_apply / dx;
-              dx2[ib][ic][v+innh][u+innw] -= dy[0][inn][in] * y_cur * (grid_source[ib][ic][v+innh][u+innw] - pts_info[0][ic][in]) / ell_apply / dx;
-              dn1[0][ic][in] += dy[0][inn][in] * sign_ntn * grid_normal[ib][ic][v+innh][u+innw] * y_cur / (ntn+1e-8);
-              dn2[ib][ic][v+innh][u+innw] += dy[0][inn][in] * sign_ntn * pts_normal[0][ic][in] * y_cur / (ntn+1e-8);
-              dr1[0][0][in] -= dy[0][inn][in] * y_cur / (2*mag_min/mag_max + res);
-              dr2[ib][0][v+innh][u+innw] -= dy[0][inn][in] * y_cur / (2*mag_min/mag_max + res);
+            if (neg_nkern_to_zero && neg_ntn){
+              for (int ic = 0; ic < C; ic++){
+                dx1[0][ic][in] = 0;
+                dx2[ib][ic][v+innh][u+innw] = 0;
+                dn1[0][ic][in] = 0;
+                dn2[ib][ic][v+innh][u+innw] = 0;
+                dr1[0][0][in] = 0;
+                dr2[ib][0][v+innh][u+innw] = 0;
+              }
             }
+            else{
+              float res = pts_nres[0][0][in] + grid_nres[ib][0][v+innh][u+innw];
+              float alpha = 2 * mag_min / (2*mag_min/mag_max + res);
+              float y_cur = (ntn+1e-8) * alpha * exp(- dx/ell_apply);
+              for (int ic = 0; ic < C; ic++){
+                dx1[0][ic][in] += dy[0][inn][in] * y_cur * (grid_source[ib][ic][v+innh][u+innw] - pts_info[0][ic][in]) / ell_apply / dx;
+                dx2[ib][ic][v+innh][u+innw] -= dy[0][inn][in] * y_cur * (grid_source[ib][ic][v+innh][u+innw] - pts_info[0][ic][in]) / ell_apply / dx;
+                dn1[0][ic][in] += dy[0][inn][in] * sign_ntn * grid_normal[ib][ic][v+innh][u+innw] * y_cur / (ntn+1e-8);
+                dn2[ib][ic][v+innh][u+innw] += dy[0][inn][in] * sign_ntn * pts_normal[0][ic][in] * y_cur / (ntn+1e-8);
+                dr1[0][0][in] -= dy[0][inn][in] * y_cur / (2*mag_min/mag_max + res);
+                dr2[ib][0][v+innh][u+innw] -= dy[0][inn][in] * y_cur / (2*mag_min/mag_max + res);
+              }
+            }
+            
           }
           // dx1[0][blockIdx.y][in] += dy[0][inn][in] * y[0][inn][in] * (grid_source[ib][blockIdx.y][v+innh][u+innw] - pts_info[0][blockIdx.y][in]) / (ell*ell);
           // dx2[ib][blockIdx.y][v+innh][u+innw] -= dy[0][inn][in] * y[0][inn][in] * (grid_source[ib][blockIdx.y][v+innh][u+innw] - pts_info[0][blockIdx.y][in]) / (ell*ell);
@@ -290,6 +330,7 @@ std::vector<torch::Tensor> cvo_dense_with_normal_cuda_forward(
     float mag_min,
     bool ignore_ib, 
     bool norm_in_dist,
+    bool neg_nkern_to_zero, 
     float ell_basedist, 
     bool return_normal_kernel
     ) {
@@ -338,6 +379,7 @@ std::vector<torch::Tensor> cvo_dense_with_normal_cuda_forward(
       mag_min,
       ignore_ib, 
       norm_in_dist, 
+      neg_nkern_to_zero, 
       ell_basedist,
       y.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(), 
       nmal_kern_y.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>() );
@@ -369,6 +411,7 @@ std::vector<torch::Tensor> cvo_dense_with_normal_cuda_backward(
     float mag_min,
     bool ignore_ib, 
     bool norm_in_dist, 
+    bool neg_nkern_to_zero, 
     float ell_basedist
     ) {
 
@@ -420,6 +463,7 @@ std::vector<torch::Tensor> cvo_dense_with_normal_cuda_backward(
         mag_min,
         ignore_ib, 
         norm_in_dist, 
+        neg_nkern_to_zero, 
         ell_basedist,
         inn);
     }));
