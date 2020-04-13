@@ -1,3 +1,8 @@
+'''
+Calculate square of 2-norm of vector distance |a-b|_2^2
+B*C*N1 x B*C*N2 -> B*N1*N2
+'''
+
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 

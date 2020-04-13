@@ -1,3 +1,8 @@
+'''
+Calculate vector distance a-b
+B*C*N1 x B*C*N2 -> B*C*N1*N2
+'''
+
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 

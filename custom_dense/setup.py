@@ -1,3 +1,8 @@
+'''
+Calculate exponential kernel exp(-|a-b|^2)/(2*l^2) or exp(-|a-b|)/l
+1*C*N x B*C*H*W -> 1*NN*N
+'''
+
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 

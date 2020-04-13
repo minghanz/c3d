@@ -1,3 +1,8 @@
+'''
+Calculate exponential kernel (1st or 2nd order) and normal kernel
+1*C*N x B*C*H*W -> 1*NN*N
+'''
+
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
