@@ -141,6 +141,7 @@ class PtSampleInGridWithNormal(Function):
         ctx.mag_min = mag_min
         ctx.ignore_ib = ignore_ib
         ctx.norm_in_dist = norm_in_dist
+        ctx.neg_nkern_to_zero = neg_nkern_to_zero
         ctx.ell_basedist =ell_basedist
         return y
 
@@ -148,8 +149,10 @@ class PtSampleInGridWithNormal(Function):
     def backward(ctx, dy):
         pts, pts_info, grid_source, grid_valid, pts_normal, grid_normal, pts_nres, grid_nres = ctx.saved_tensors
         dy = dy.contiguous()
-        dx1, dx2, dn1, dn2, dr1, dr2 = cvo_dense_with_normal.backward( \
-            dy, pts, pts_info, grid_source, grid_valid, pts_normal, grid_normal, pts_nres, grid_nres, ctx.neighbor_range, ctx.ell, ctx.mag_max, ctx.mag_min, ctx.ignore_ib, ctx.norm_in_dist, ctx.ell_basedist)
+        # dx1, dx2, dn1, dn2, dr1, dr2 = cvo_dense_with_normal.backward( \
+        #     dy, pts, pts_info, grid_source, grid_valid, pts_normal, grid_normal, pts_nres, grid_nres, ctx.neighbor_range, ctx.ell, ctx.mag_max, ctx.mag_min, ctx.ignore_ib, ctx.norm_in_dist, ctx.ell_basedist)
+        dx1, dx2, dn1, dn2, dr1, dr2 = cvo_dense_with_normal_output.backward( \
+            dy, pts, pts_info, grid_source, grid_valid, pts_normal, grid_normal, pts_nres, grid_nres, ctx.neighbor_range, ctx.ell, ctx.mag_max, ctx.mag_min, ctx.ignore_ib, ctx.norm_in_dist, ctx.neg_nkern_to_zero, ctx.ell_basedist)
         # return None, dx1, dx2, None, dn1, dn2, dr1, dr2, None, None, None, None, None, None, None, None, None, None
         # return None, dx1, dx2, None, None, None, dr1, dr2, None, None, None, None, None, None, None, None, None, None
         return None, dx1, dx2, None, dn1, dn2, None, None, None, None, None, None, None, None, None, None, None, None
