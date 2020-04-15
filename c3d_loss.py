@@ -139,26 +139,7 @@ def transform_pc3d(pcl_c3d, Ts, seq_n, K_cur, batch_n):
     n_group = batch_n // seq_n
 
     ## get relative pose
-    T = []
-    R = []
-    t = []
-    target_id = []
-    for n_g in range(n_group):
-        for n_f in range(seq_n):
-            n = n_g * seq_n + n_f
-            T1 = Ts[n]
-            if n_f == seq_n-1:
-                tid = n_g * seq_n
-            else:
-                tid = n+1
-            target_id.append(tid)
-            T2 = Ts[tid]
-            T21 = torch.matmul( torch.inverse(T2), T1 )
-            T.append(T21)
-            R21 = T21[:3, :3]
-            R.append(R21)
-            t21 = T21[:3, [3]]
-            t.append(t21)
+    T, R, t, target_id = relative_T(Ts, seq_n, batch_n)
 
     ## get accumulative length
     nb = pcl_c3d.flat.nb
@@ -208,87 +189,43 @@ def transform_pc3d(pcl_c3d, Ts, seq_n, K_cur, batch_n):
 
     return tr_pcl_c3d
     
+def relative_T(Ts, seq_n, batch_size):
+    
+    assert batch_size % seq_n == 0    # mode==0
+    n_group = batch_size // seq_n
 
-def read_calib_file(path):
-    """Read KITTI calibration file
-    (from https://github.com/hunse/kitti)
-    """
-    float_chars = set("0123456789.e+- ")
-    data = {}
-    with open(path, 'r') as f:
-        for line in f.readlines():
-            key, value = line.split(':', 1)
-            value = value.strip()
-            data[key] = value
-            if float_chars.issuperset(value):
-                # try to cast to float array
-                try:
-                    data[key] = np.array(list(map(float, value.split(' '))))
-                except ValueError:
-                    # casting error: data[key] already eq. value, so pass
-                    pass
+    ## get relative pose
+    T = []
+    R = []
+    t = []
+    target_id = []
+    for n_g in range(n_group):
+        for n_f in range(seq_n):
+            n = n_g * seq_n + n_f
+            T1 = Ts[n]
+            if n_f == seq_n-1:
+                tid = n_g * seq_n
+            else:
+                tid = n+1
+            target_id.append(tid)
+            T2 = Ts[tid]
+            T21 = torch.matmul( torch.inverse(T2), T1 )
+            T.append(T21)
+            R21 = T21[:3, :3]
+            R.append(R21)
+            t21 = T21[:3, [3]]
+            t.append(t21)
+    
+    return T, R, t, target_id
 
-    return data
-
-def preload_K(data_root):
-    '''Designed for KITTI dataset. Preload intrinsic params, which is different for each date
-    K_dict[(date, side)]: a dict with attrbutes: width, height, K_unit
-    '''
-    dates = os.listdir(data_root)
-    K_dict = {}
-    for date in dates:
-        cam_intr_file = os.path.join(data_root, date, 'calib_cam_to_cam.txt')
-        intr = read_calib_file(cam_intr_file)
-        im_shape = intr["S_rect_02"][::-1].astype(np.int32) ## ZMH: [height, width]
-        for side in [2,3]:
-            K_dict[(date, side)] = EasyDict()
-            P_rect = intr['P_rect_0'+str(side)].reshape(3, 4)
-            K = P_rect[:, :3]
-            K_unit = np.identity(3).astype(np.float32)
-            K_unit[0] = K[0] / float(im_shape[1])
-            K_unit[1] = K[1] / float(im_shape[0])
-
-            K_dict[(date, side)].width = im_shape[1]
-            K_dict[(date, side)].height = im_shape[0]
-            K_dict[(date, side)].K_unit = K_unit
-    return K_dict
-
-class C3DLoss(nn.Module):
-    def __init__(self, data_root, batch_size=None, seq_frame_n=1):
-        super(C3DLoss, self).__init__()
-        self.width = {}
-        self.height = {}
-        self.seq_frame_n = seq_frame_n
-        # self.K = {}
-        # self.uvb_flat = {}
-        # self.xy1_flat = {}
-        
-        intr_dict = preload_K(data_root)
-        for intr in intr_dict:
-            uvb_grid, xy1_grid, self.width[intr], self.height[intr], K = set_from_intr(intr_dict[intr], batch_size)
-            self.register_buffer("uvb_grid_{}_{}".format(intr[0], intr[1]), uvb_grid)
-            self.register_buffer("xy1_grid_{}_{}".format(intr[0], intr[1]), xy1_grid)
-            self.register_buffer("K_{}_{}".format(intr[0], intr[1]), K)
+class C3DLoss(CamProj):
+    def __init__(self, *args, **kwargs):
+        super(C3DLoss, self).__init__(*args, **kwargs)
 
         self.feat_inp_self = ["xyz", "hsv"]
         self.feat_inp_cross = ["xyz", "hsv"]
 
         self.normal_op_dense = NormalFromDepthDense()
-        self.batch_size = batch_size
-
-    def K(self, date_side):
-        date = date_side[0]
-        side = date_side[1]
-        return self.__getattr__("K_{}_{}".format(date, side))
-    def uvb_grid(self, date_side):
-        date = date_side[0]
-        side = date_side[1]
-        return self.__getattr__("uvb_grid_{}_{}".format(date, side))
-        # return getattr(self, "uvb_grid_{}_{}".format(date, side))
-    def xy1_grid(self, date_side):
-        date = date_side[0]
-        side = date_side[1]
-        return self.__getattr__("xy1_grid_{}_{}".format(date, side))
 
     def parse_opts(self, inputs=None):
         parser = argparse.ArgumentParser(description='Options for continuous 3D loss')
@@ -357,44 +294,15 @@ class C3DLoss(nn.Module):
         date_side = (date_side[0][0], int(date_side[1][0]) ) # originally it is a list. Take the first since the mini_batch share the same intrinsics. 
 
         batch_size = rgb.shape[0]       ## if drop_last is False in Sampler/DataLoader, then the batch_size is not constant. 
-        if intr is not None:
-            ## use input intrinsics to generate needed parameters now
-            uvb_grid_cur, xy1_grid_cur, width_cur, height_cur, K_cur = set_from_intr(intr, batch_size, device=rgb.device)
-        else:
-            ## retrieve from preloaded parameters
-            xy1_grid_cur = self.xy1_grid(date_side)
-            uvb_grid_cur = self.uvb_grid(date_side)
-            width_cur = self.width[date_side]
-            height_cur = self.height[date_side]
-            K_cur = self.K(date_side)
+        
+        cam_info = self.prepare_cam_info(date_side, xy_crop, intr, batch_size, rgb.device)
 
-        ## In case the batch_size is not constant as originally set
-        if batch_size != self.batch_size:
-            xy1_grid_cur = xy1_grid_cur[:batch_size]
-            uvb_grid_cur = uvb_grid_cur[:batch_size]
-            K_cur = K_cur[:batch_size]
+        return self.forward_with_caminfo(rgb, depth, depth_gt, depth_mask, depth_gt_mask, nkern_fname, Ts, cam_info)
 
-        ## crop the grids and modify intrinsics to match the cropped image
-        if xy_crop is not None:
-            x_size = xy_crop[2][0]
-            y_size = xy_crop[3][0]
-            uvb_grid_crop = uvb_grid_cur[:batch_size,:,:y_size, :x_size]
-            xy1_grid_crop = torch.zeros((batch_size, 3, y_size, x_size), device=rgb.device, dtype=torch.float32)
-            K_crop = torch.zeros((batch_size, 3, 3), device=rgb.device, dtype=torch.float32)
-            for ib in range(batch_size):
-                x_start = xy_crop[0][ib]
-                y_start = xy_crop[1][ib]
-                x_size = xy_crop[2][ib]
-                y_size = xy_crop[3][ib]
-                xy1_grid_crop[ib] = xy1_grid_cur[ib,:,y_start:y_start+y_size, x_start:x_start+x_size]
-                K_crop[ib] = K_cur[ib]
-                K_crop[ib, 0, 2] = K_crop[ib, 0, 2] - x_start
-                K_crop[ib, 1, 2] = K_crop[ib, 1, 2] - y_start
-            K_cur = K_crop
-            width_cur = x_size      # cropped width and height are deterministic
-            height_cur = y_size
-            xy1_grid_cur = xy1_grid_crop
-            uvb_grid_cur = uvb_grid_crop
+    def forward_with_caminfo(self, rgb, depth, depth_gt, depth_mask, depth_gt_mask, nkern_fname, Ts, cam_info):
+        batch_size = rgb.shape[0]
+        
+        K_cur, width_cur, height_cur, xy1_grid_cur, uvb_grid_cur = cam_info.unpack()
 
         uvb_flat_cur = uvb_grid_cur.reshape(batch_size, 3, -1)
 
