@@ -3,7 +3,7 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .utils.cam import *
+from .utils.cam_proj import *
 
 torch_vs = (torch.__version__).split('.')
 torch_version = float(torch_vs[0]) + 0.1 * float(torch_vs[1])
@@ -77,19 +77,26 @@ def wrap_xyz_group(xyz_flat, rgb, Rs, ts, K_cur, width, height):
 
     return rgb_recsts
 
-def wrap_xyz(xyz, R, t, K, rgb_source, rgb_target, width, height):
+def wrap_xyz(xyz, R, t, K, rgb_source, rgb_target, width, height, align_corner=True):
     xyz_trs = torch.matmul(R, xyz) + t
     uvz_trs = torch.matmul(K, xyz_trs)
-    uv_trs = uvz_trs[:, :2] / uvz_trs[:, [2]]   # TODO: matlab -1
-    uv_trs[:, 0] = uv_trs[:, 0] / width
-    uv_trs[:, 1] = uv_trs[:, 1] / height
-    uv_trs = (uv_trs - 0.5) * 2
+    uv_trs = uvz_trs[:, :2] / uvz_trs[:, [2]]   ## matlab -1 is now in K in K_mat2py in dataset_kitti.py
+    if align_corner:    # [0, w-1] -> [0, 1]
+        uv_trs[:, 0] = uv_trs[:, 0] / (width - 1)
+        uv_trs[:, 1] = uv_trs[:, 1] / (height - 1)
+    else:               # [-0.5, w-0.5] -> [0, 1]
+        uv_trs[:, 0] = (uv_trs[:, 0] + 0.5) / width
+        uv_trs[:, 1] = (uv_trs[:, 1] + 0.5) / height
+    uv_trs = (uv_trs - 0.5) * 2     # from [0, 1] to [-1, 1]
+
     uv_trs = uv_trs.reshape(rgb_target.shape[0], 2, rgb_target.shape[2], rgb_target.shape[3])
     uv_trs = uv_trs.permute(0, 2, 3, 1)
     if torch_version <= 1.2:
+        if not align_corner:
+            raise ValueError('torch_version <= 1.2, can only work with align_corner=True')
         rgb_recst = F.grid_sample(rgb_source, uv_trs, padding_mode="border")
     else:
-        rgb_recst = F.grid_sample(rgb_source, uv_trs, padding_mode="border", align_corners=True)
+        rgb_recst = F.grid_sample(rgb_source, uv_trs, padding_mode="border", align_corners=align_corner)
 
     return rgb_recst
 

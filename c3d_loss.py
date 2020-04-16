@@ -14,7 +14,7 @@ from .utils.color import rgb_to_hsv
 from .cvo_funcs import *
 from .utils.geometry import *
 from .utils.pc3d import *
-from .utils.cam import *
+from .utils.cam_proj import *
 
 import argparse
 
@@ -260,8 +260,10 @@ class C3DLoss(CamProj):
                             help="neighbor range when calculating inner product")
         parser.add_argument("--normal_nrange",         type=int, default=5,
                             help="neighbor range when calculating normal direction on sparse point cloud")
-        parser.add_argument("--pred_pred_weight",        type=float, default=0,
+        parser.add_argument("--cross_pred_pred_weight",        type=float, default=0,
                             help="weight of c3d loss between cross-frame predictions relative to gt_pred_weight as 1. You may want to set to less than 1 because predictions are denser than gt.")
+        parser.add_argument("--cross_gt_pred_weight",        type=float, default=0,
+                            help="weight of c3d loss between predictions and gt from another frame, relative to gt_pred_weight as 1. You may want to set to 1. ")
 
         self.opts, rest = parser.parse_known_args(args=inputs) # inputs can be None, in which case _sys.argv[1:] are parsed
 
@@ -271,7 +273,7 @@ class C3DLoss(CamProj):
             self.opts.ell_min[ell_item] = self.opts.ell_values_min[i]
             self.opts.ell_rand[ell_item] = self.opts.ell_values_rand[i]
 
-        if self.opts.pred_pred_weight > 0:
+        if self.opts.cross_pred_pred_weight > 0:
             self.opts.ell_min_predpred = {}
             self.opts.ell_rand_predpred = {}
             for i, ell_item in enumerate(self.opts.ell_keys):
@@ -306,11 +308,11 @@ class C3DLoss(CamProj):
 
         uvb_flat_cur = uvb_grid_cur.reshape(batch_size, 3, -1)
 
-        pc3ds = EasyDict()
-        # pc3ds["gt"] = init_pc3d()
-        # pc3ds["pred"] = init_pc3d()
-        pc3ds["gt"] = PCL_C3D()
-        pc3ds["pred"] = PCL_C3D()
+        self.pc3ds = EasyDict()
+        # self.pc3ds["gt"] = init_pc3d()
+        # self.pc3ds["pred"] = init_pc3d()
+        self.pc3ds["gt"] = PCL_C3D()
+        self.pc3ds["pred"] = PCL_C3D()
 
         ## rgb to hsv
         hsv = rgb_to_hsv(rgb, flat=False)           # B*3*H*W
@@ -322,15 +324,15 @@ class C3DLoss(CamProj):
         feat_comm_flat['hsv'] = hsv_flat
         
         ## generate PCL_C3D object
-        pc3ds["gt"] = load_pc3d(pc3ds["gt"], depth_gt, depth_gt_mask, xy1_grid_cur, uvb_flat_cur, K_cur, feat_comm_grid, feat_comm_flat, sparse=True, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts)
-        pc3ds["pred"] = load_pc3d(pc3ds["pred"], depth, depth_mask, xy1_grid_cur, uvb_flat_cur, K_cur, feat_comm_grid, feat_comm_flat, sparse=False, use_normal=self.opts.use_normal, dense_nml_op=self.normal_op_dense)
+        self.pc3ds["gt"] = load_pc3d(self.pc3ds["gt"], depth_gt, depth_gt_mask, xy1_grid_cur, uvb_flat_cur, K_cur, feat_comm_grid, feat_comm_flat, sparse=True, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts)
+        self.pc3ds["pred"] = load_pc3d(self.pc3ds["pred"], depth, depth_mask, xy1_grid_cur, uvb_flat_cur, K_cur, feat_comm_grid, feat_comm_flat, sparse=False, use_normal=self.opts.use_normal, dense_nml_op=self.normal_op_dense)
 
-        self.flag_cross_frame = Ts is not None and self.seq_frame_n > 1
-        self.flag_cross_frame_predpred = self.flag_cross_frame and self.opts.pred_pred_weight > 0
+        self.flag_cross_frame = Ts is not None and self.seq_frame_n > 1 and self.opts.cross_gt_pred_weight > 0
+        self.flag_cross_frame_predpred = Ts is not None and self.seq_frame_n > 1 and self.opts.cross_pred_pred_weight > 0
         if self.flag_cross_frame:
-            pc3ds["gt_trans_flat"] = transform_pc3d(pc3ds["gt"], Ts, self.seq_frame_n, K_cur, batch_size)
+            self.pc3ds["gt_trans_flat"] = transform_pc3d(self.pc3ds["gt"], Ts, self.seq_frame_n, K_cur, batch_size)
         if self.flag_cross_frame_predpred:
-            pc3ds["pred_trans_flat"] = transform_pc3d(pc3ds["pred"], Ts, self.seq_frame_n, K_cur, batch_size)
+            self.pc3ds["pred_trans_flat"] = transform_pc3d(self.pc3ds["pred"], Ts, self.seq_frame_n, K_cur, batch_size)
         
         ## random ell
         ell = {}
@@ -343,15 +345,21 @@ class C3DLoss(CamProj):
                 ell_predpred[key] = self.opts.ell_min_predpred[key] + np.abs(self.opts.ell_rand_predpred[key]* np.random.normal()) 
 
         ## calculate inner product
-        inp = self.calc_inn_pc3d(pc3ds["gt"].flat, pc3ds["pred"].grid, ell, nkern_fname)
+        inp = self.calc_inn_pc3d(self.pc3ds["gt"].flat, self.pc3ds["pred"].grid, ell, nkern_fname)
         inp_total = inp
 
         if self.flag_cross_frame:
-            inp_cross_frame = self.calc_inn_pc3d(pc3ds["gt_trans_flat"], pc3ds["pred"].grid, ell, None) # TODO: specify the nkern_fname here
-            inp_total = inp_total + inp_cross_frame
+            inp_cross_frame = self.calc_inn_pc3d(self.pc3ds["gt_trans_flat"], self.pc3ds["pred"].grid, ell, None) # TODO: specify the nkern_fname here
+            inp_total = inp_total + inp_cross_frame * self.opts.cross_gt_pred_weight
+        #     print('used cross gt_pred')
+        # else:
+        #     print('not used cross gt_pred')
         if self.flag_cross_frame_predpred:
-            inp_predpred = self.calc_inn_pc3d(pc3ds["pred_trans_flat"], pc3ds["pred"].grid, ell_predpred, None) # TODO: specify the nkern_fname here
-            inp_total = inp_total + inp_predpred * self.opts.pred_pred_weight
+            inp_predpred = self.calc_inn_pc3d(self.pc3ds["pred_trans_flat"], self.pc3ds["pred"].grid, ell_predpred, None) # TODO: specify the nkern_fname here
+            inp_total = inp_total + inp_predpred * self.opts.cross_pred_pred_weight
+        #     print('used cross pred_pred')
+        # else:
+        #     print('not used cross pred_pred')
         
         return inp_total
     
@@ -391,7 +399,8 @@ class C3DLoss(CamProj):
 
         return inp
 
-    
+    def get_normal_feature(self):
+        return self.pc3ds["gt"].grid.feature['normal'], self.pc3ds["pred"].grid.feature['normal']
 
 if __name__ == "__main__":
     pcl_c3d = init_pcl()

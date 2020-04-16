@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 
 '''from pytorch-unet/geometry.py'''
 def rgb_to_hsv(image, flat=False):
@@ -140,3 +141,85 @@ def hsv_to_rgb(image, flat=False):
     # ][int(i%6)]
 
     return rgb
+
+'''from bts/bts_utils.py'''
+def rgbmap(gray, mask_zeros=False, max_val=-1, min_val=0):
+    """
+    Assuming input gray is 1D ndarray between [0,255]
+    return is rgb between [0, 255]
+    https://www.particleincell.com/2014/colormap/ 
+    """
+    # ##
+    # r = inten
+    # g = np.zeros_like(r)
+    # b = 255- inten
+    # ##
+
+    if mask_zeros:
+        valid_mask = gray>0
+        invalid_mask = np.invert(valid_mask)
+        min_cur = gray[valid_mask].min()
+        max_cur = gray[valid_mask].max()
+    else:
+        min_cur = gray.min()
+        max_cur = gray.max()
+    
+    if max_val == -1:
+        ## mode 1: normalize to fulfill the range, excluding points of zero value (deal with them outside of this function)
+        gray = (gray.astype(float) - min_cur )/( max_cur - min_cur )  # normalize to fulfill the range
+    else:
+        ## mode 2: normalize with fixed ratio
+        gray = (gray.astype(float) - min_val )/( max_val - min_val )
+
+    if mask_zeros:
+        gray[invalid_mask] = 0.5 # this value does not matter as long as it will not cause out-of-range in calculating idx0. It will be set to 0 at the end
+
+    gray_flat = gray.reshape(-1)
+
+    a = (gray_flat)/0.25
+    X = np.floor(a)           # group
+    Y = np.floor( 255*(a-X) ) # residual
+    cand = np.zeros((5,gray_flat.shape[0], 3))
+    cand[0,:,0] = 255
+    cand[0,:,1] = Y
+    cand[0,:,2] = 0
+
+    cand[1,:,0] = 255-Y
+    cand[1,:,1] = 255
+    cand[1,:,2] = 0
+
+    cand[2,:,0] = 0
+    cand[2,:,1] = 255
+    cand[2,:,2] = Y
+
+    cand[3,:,0] = 0
+    cand[3,:,1] = 255-Y
+    cand[3,:,2] = 255
+
+    cand[4,:,0] = 0
+    cand[4,:,1] = 0
+    cand[4,:,2] = 255
+    
+    idx0 = X.astype(int)
+    idx1 = np.arange(gray_flat.shape[0])
+
+    rgb = cand[idx0, idx1]
+
+    # gray = 0.3 + gray * 0.7
+    # r = (rgb[:,0] * gray).astype(int)
+    # g = (rgb[:,1] * gray).astype(int)
+    # b = (rgb[:,2] * gray).astype(int)
+    r = rgb[:,0].astype(int)
+    g = rgb[:,1].astype(int)
+    b = rgb[:,2].astype(int)
+
+    r = r.reshape(gray.shape)
+    g = g.reshape(gray.shape)
+    b = b.reshape(gray.shape)
+
+    if mask_zeros:
+        r[invalid_mask] = 0
+        g[invalid_mask] = 0
+        b[invalid_mask] = 0
+    
+    return r,g,b
