@@ -15,7 +15,7 @@ class PhoLoss(CamProj):
         self.ssim = SSIM()
         
 
-    def forward(self, rgb, depth, Ts, date_side=None, xy_crop=None, intr=None):
+    def forward(self, rgb, depth, Ts, date_side=None, xy_crop=None, intr=None, image_side=None, T_side=None, off_side=None):
         assert date_side is not None or intr is not None
         date_side = (date_side[0][0], int(date_side[1][0]) ) # originally it is a list. Take the first since the mini_batch share the same intrinsics. 
 
@@ -23,13 +23,17 @@ class PhoLoss(CamProj):
 
         cam_info = self.prepare_cam_info(date_side, xy_crop, intr, batch_size, rgb.device)
 
-        rgb_recsts, reprj_errs = wrap_image(rgb, depth, Ts, cam_info, self.ssim)
+        rgb_recsts, reprj_errs = wrap_image(rgb, depth, Ts, cam_info, self.ssim, image_side, T_side, off_side)
         # for item in reprj_errs:
         #     print(item.shape)
+        if isinstance(reprj_errs, list):
+            reprj_err_out = torch.cat(reprj_errs).mean()
+        else:
+            reprj_err_out = reprj_errs.mean()
         
-        return rgb_recsts, torch.cat(reprj_errs).mean()
+        return rgb_recsts, reprj_err_out
 
-def wrap_image(rgb, depth, Ts, cam_info, ssim_op):
+def wrap_image(rgb, depth, Ts, cam_info, ssim_op, image_side, T_side, off_side):
     '''
     back project
     transform
@@ -37,6 +41,7 @@ def wrap_image(rgb, depth, Ts, cam_info, ssim_op):
     F.grid_sample
     calc_difference
     '''
+    seq_aside = image_side is not None
 
     K_cur, width_cur, height_cur, xy1_grid_cur, uvb_grid_cur = cam_info.unpack()
 
@@ -44,17 +49,49 @@ def wrap_image(rgb, depth, Ts, cam_info, ssim_op):
     xyz_grid = xy1_grid_cur * depth
     xyz_flat = xyz_grid.reshape(xyz_grid.shape[0], 3, -1)
 
-    ## get relative pose
-    T, R, t = relative_T(Ts)
+    if not seq_aside:
+        ## get relative pose
+        T, R, t = relative_T(Ts)
+        ## transform
+        # reverse_tid = [target_id.index(i) for i in range(len(target_id))]
+        # xyz_flat_transed = torch.stack( [torch.matmul(R[i], xyz_flat[i]) + t[i] for i in reverse_tid], dim=0)
+        rgb_recsts = wrap_xyz_group(xyz_flat, rgb, R, t, K_cur, width_cur, height_cur)
+        ## reprojection error
+        reprj_errs = reproj_error_group(rgb_recsts, rgb, ssim_op)
+    else:
+        T, R, t = relative_T_to_side(Ts, T_side)
+        rgb_recsts = wrap_xyz_group_to_side(xyz_flat, rgb, R, t, K_cur, width_cur, height_cur, image_side)
+        # reprj_errs = reproj_error_group_to_side(rgb_recsts, rgb, ssim_op)
+        reprj_errs = reproj_error_group_to_side_batch(rgb_recsts, rgb, ssim_op)
 
-    ## transform
-    # reverse_tid = [target_id.index(i) for i in range(len(target_id))]
-    # xyz_flat_transed = torch.stack( [torch.matmul(R[i], xyz_flat[i]) + t[i] for i in reverse_tid], dim=0)
-    rgb_recsts = wrap_xyz_group(xyz_flat, rgb, R, t, K_cur, width_cur, height_cur)
-
-    ## reprojection error
-    reprj_errs = reproj_error_group(rgb_recsts, rgb, ssim_op)
     return rgb_recsts, reprj_errs
+
+def wrap_xyz_group_to_side(xyz_flat, rgb, Rs, ts, K_cur, width, height, image_side):
+    batch_size = rgb.shape[0]
+    side_size = image_side.shape[1]
+
+    rgb_recsts = []
+    # for ib in range(batch_size):
+    #     for ic in range(side_size):
+    #         i_side = side_size * ib + ic
+    #         rgb_recst = wrap_xyz(xyz_flat[[ib]], Rs[i_side], ts[i_side], K_cur[[ib]], image_side[ib, [ic]], rgb[[ib]], width, height)
+    #         rgb_recsts.append(rgb_recst)
+
+    for ic in range(side_size):
+        R_group = []
+        t_group = []
+        for ib in range(batch_size):
+            i_side = side_size * ib + ic
+            R_group.append(Rs[i_side])
+            t_group.append(ts[i_side])
+
+        R_grouped = torch.stack(R_group, 0)
+        t_grouped = torch.stack(t_group, 0)
+
+        rgb_recst = wrap_xyz(xyz_flat, R_grouped, t_grouped, K_cur, image_side[:, ic], rgb, width, height)  # B*C*H*W
+        rgb_recsts.append(rgb_recst)
+
+    return rgb_recsts
 
 def wrap_xyz_group(xyz_flat, rgb, Rs, ts, K_cur, width, height):
     batch_size = rgb.shape[0]
@@ -99,6 +136,35 @@ def wrap_xyz(xyz, R, t, K, rgb_source, rgb_target, width, height, align_corner=T
         rgb_recst = F.grid_sample(rgb_source, uv_trs, padding_mode="border", align_corners=align_corner)
 
     return rgb_recst
+
+def reproj_error_group_to_side(rgb_recsts, rgb, ssim_op):
+    batch_size = rgb.shape[0]
+    side_size = len(rgb_recsts) // batch_size
+    assert len(rgb_recsts) == side_size * batch_size
+
+    reprj_errs = []
+    for ib in range(batch_size):
+        cur_err = []
+        for ic in range(side_size):
+            i_side = side_size * ib + ic
+            cur_err.append( compute_reprojection_loss(rgb_recsts[i_side], rgb[[ib]], ssim_op) )
+        reprj_err, _ = torch.min(torch.cat(cur_err, dim=0), dim=0, keepdim=True)
+        reprj_errs.append(reprj_err)
+    return reprj_errs
+
+def reproj_error_group_to_side_batch(rgb_recsts, rgb, ssim_op):
+    side_size = len(rgb_recsts)
+
+    reprj_errs = []
+    for ic in range(side_size):
+        reprj_err = compute_reprojection_loss(rgb_recsts[ic], rgb, ssim_op)
+        reprj_errs.append(reprj_err)
+    if side_size == 2: 
+        reprj_errs = torch.min(reprj_errs[0], reprj_errs[1])
+    else:
+        reprj_errs, _ = torch.min(torch.stack(reprj_errs, 0), dim=0)
+    
+    return reprj_errs
 
 def reproj_error_group(rgb_recsts, rgb, ssim_op):
     batch_size = rgb.shape[0]
@@ -161,6 +227,26 @@ def relative_T(Ts):
         t.append(t21)
 
     return T, R, t
+
+def relative_T_to_side(T_self, T_side):
+    batch_size = T_self.shape[0]
+
+    ## get relative pose
+    Ts = []
+    Rs = []
+    ts = []
+    for ib in range(batch_size):
+        T0 = T_self[ib]
+        for ic in range(T_side.shape[1]):
+            T_side_cur = T_side[ib, ic]
+            T = torch.matmul( torch.inverse(T_side_cur), T0 )
+            R = T[:3, :3]
+            t = T[:3, [3]]
+            Ts.append(T)
+            Rs.append(R)
+            ts.append(t)
+
+    return Ts, Rs, ts
 
 
 class SSIM(nn.Module):

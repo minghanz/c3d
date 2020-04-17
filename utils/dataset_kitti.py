@@ -2,7 +2,7 @@ import numpy as np
 import os
 # from easydict import EasyDict
 
-from .cam import scale_K, K_mat2py
+from .cam import scale_K, K_mat2py, scale_from_size
 
 '''from bts/c3d_loss.py'''
 def read_calib_file(path):
@@ -56,9 +56,10 @@ def preload_K(data_root, align_corner=True):
             ## intrinsics
             K = P_rect[:, :3]
             K = K_mat2py(K)
-            effect_w = float(im_shape[1] - 1 if align_corner else im_shape[1])
-            effect_h = float(im_shape[0] - 1 if align_corner else im_shape[0])
-            K_unit = scale_K(K, 1/effect_w, 1/effect_h)
+            # effect_w = float(im_shape[1] - 1 if align_corner else im_shape[1])
+            # effect_h = float(im_shape[0] - 1 if align_corner else im_shape[0])
+            scale_w, scale_h = scale_from_size(old_width=im_shape[1], old_height=im_shape[0])
+            K_unit = scale_K(K, scale_w, scale_h)
 
             K_dict[(date, side)].width = im_shape[1]
             K_dict[(date, side)].height = im_shape[0]

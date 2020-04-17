@@ -22,16 +22,32 @@ def xy1_from_uv(uv_grid, inv_K, torch_mode):
     inv_K: 3*3
     return: uv1_flat, xy1_flat(3*N)
     """
-    if torch_mode:
-        uv_flat = uv_grid.reshape(2, -1) # 2*N
-        dummy_ones = torch.ones((1, uv_flat.shape[1]), dtype=uv_flat.dtype, device=uv_flat.device) # 1*N
-        uv1_flat = torch.cat((uv_flat, dummy_ones), dim=0) # 3*N
-        xy1_flat = torch.matmul(inv_K, uv1_flat)
+    if len(uv_grid.shape) == 4:
+        batch_size = uv_grid.shape[0]
+        if torch_mode:
+            uv_flat = uv_grid.reshape(batch_size, 2, -1) # B*2*N
+            dummy_ones = torch.ones((batch_size, 1, uv_flat.shape[1]), dtype=uv_flat.dtype, device=uv_flat.device) # B*1*N
+            uv1_flat = torch.cat((uv_flat, dummy_ones), dim=1) # B*3*N
+            xy1_flat = torch.matmul(inv_K, uv1_flat)
+        else:
+            uv_flat = uv_grid.reshape(batch_size, 2, -1) # B*2*N
+            dummy_ones = np.ones((batch_size, 1, uv_flat.shape[1]), dtype=np.float32)
+            uv1_flat = np.concatenate((uv_flat, dummy_ones), axis=1) # B*3*N
+            xy1_flat = np.matmul(inv_K, uv1_flat)
+
+    elif len(uv_grid.shape) == 3:
+        if torch_mode:
+            uv_flat = uv_grid.reshape(2, -1) # 2*N
+            dummy_ones = torch.ones((1, uv_flat.shape[1]), dtype=uv_flat.dtype, device=uv_flat.device) # 1*N
+            uv1_flat = torch.cat((uv_flat, dummy_ones), dim=0) # 3*N
+            xy1_flat = torch.matmul(inv_K, uv1_flat)
+        else:
+            uv_flat = uv_grid.reshape(2, -1) # 2*N
+            dummy_ones = np.ones((1, uv_flat.shape[1]), dtype=np.float32)
+            uv1_flat = np.concatenate((uv_flat, dummy_ones), axis=0) # 3*N
+            xy1_flat = np.matmul(inv_K, uv1_flat)
     else:
-        uv_flat = uv_grid.reshape(2, -1) # 2*N
-        dummy_ones = torch.ones((1, uv_flat.shape[1]), dtype=np.float32)
-        uv1_flat = np.concatenate((uv_flat, dummy_ones), axis=0) # 3*N
-        xy1_flat = np.matmul(inv_K, uv1_flat)
+        raise ValueError('Dimension of uv_grid not compatible', uv_grid.shape)
 
     return uv1_flat, xy1_flat
 
@@ -42,9 +58,10 @@ def set_from_intr(width, height, K_unit, batch_size, device=None, align_corner=T
     uv_grid = gen_uv_grid(width, height, to_torch) # 2*H*W
 
     K = K_unit.copy()
-    effect_w = float(width - 1 if align_corner else width)
-    effect_h = float(height - 1 if align_corner else height)
-    K = scale_K(K, effect_w, effect_h)
+    # effect_w = float(width - 1 if align_corner else width)
+    # effect_h = float(height - 1 if align_corner else height)
+    scale_w, scale_h = scale_from_size(new_width=width, new_height=height)
+    K = scale_K(K, scale_w, scale_h)
 
     inv_K = np.linalg.inv(K)
     if to_torch:
@@ -82,6 +99,14 @@ def K_mat2py(K):
     K_new[1, 2] -= 1
     return K_new
 
+def scale_from_size(old_width=2, old_height=2, new_width=2, new_height=2, align_corner=True):
+    '''
+    A unit K is equivalent to the K of a 2*2 image
+    '''
+    scale_w = (new_width - 1) / (old_width - 1) if align_corner else new_width / old_width
+    scale_h = (new_height - 1) / (old_height - 1) if align_corner else new_height / old_height
+    return scale_w, scale_h
+
 def scale_K(K, scale_w, scale_h, align_corner=True):
     '''
     generate new intrinsic matrix from original K and scale
@@ -111,9 +136,10 @@ def lidar_to_depth(velo, extr_cam_li, K_unit, im_shape, align_corner=True):
     """extr_cam_li: 4x4, intr_K: 3x3"""
     ## recover K
     intr_K = K_unit.copy()
-    effect_w = float(im_shape[1] - 1 if align_corner else im_shape[1])
-    effect_h = float(im_shape[0] - 1 if align_corner else im_shape[0])
-    intr_K = scale_K(intr_K, effect_w, effect_h)
+    # effect_w = float(im_shape[1] - 1 if align_corner else im_shape[1])
+    # effect_h = float(im_shape[0] - 1 if align_corner else im_shape[0])
+    scale_w, scale_h = scale_from_size(new_width=im_shape[1], new_height=im_shape[0])
+    intr_K = scale_K(intr_K, scale_w, scale_h)
 
     ## transform to camera frame
     velo_in_cam_frame = np.dot(extr_cam_li, velo.T).T # N*4
