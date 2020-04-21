@@ -8,32 +8,23 @@ from .utils.cam_proj import *
 torch_vs = (torch.__version__).split('.')
 torch_version = float(torch_vs[0]) + 0.1 * float(torch_vs[1])
 
-class PhoLoss(CamProj):
+class PhoLoss(nn.Module):
 
-    def __init__(self, *args, **kwargs):
-        super(PhoLoss, self).__init__(*args, **kwargs)
+    def __init__(self):
+        super(PhoLoss, self).__init__()
+
         self.ssim = SSIM()
         
 
-    def forward(self, rgb, depth, Ts, date_side=None, xy_crop=None, intr=None, image_side=None, T_side=None, off_side=None):
-        assert date_side is not None or intr is not None
-        date_side = (date_side[0][0], int(date_side[1][0]) ) # originally it is a list. Take the first since the mini_batch share the same intrinsics. 
+    def forward(self, rgb, depth, Ts, cam_info, image_side=None, T_side=None, off_side=None, xy_crop=None):
 
-        batch_size = rgb.shape[0]       ## if drop_last is False in Sampler/DataLoader, then the batch_size is not constant. 
-
-        cam_info = self.prepare_cam_info(date_side, xy_crop, intr, batch_size, rgb.device)
-
-        rgb_recsts, reprj_errs = wrap_image(rgb, depth, Ts, cam_info, self.ssim, image_side, T_side, off_side)
+        rgb_recsts, reprj_err_out = wrap_image(rgb, depth, Ts, cam_info, self.ssim, image_side, T_side, off_side, xy_crop)
         # for item in reprj_errs:
         #     print(item.shape)
-        if isinstance(reprj_errs, list):
-            reprj_err_out = torch.cat(reprj_errs).mean()
-        else:
-            reprj_err_out = reprj_errs.mean()
         
         return rgb_recsts, reprj_err_out
 
-def wrap_image(rgb, depth, Ts, cam_info, ssim_op, image_side, T_side, off_side):
+def wrap_image(rgb, depth, Ts, cam_info, ssim_op, image_side, T_side, off_side, xy_crop):
     '''
     back project
     transform
@@ -50,23 +41,35 @@ def wrap_image(rgb, depth, Ts, cam_info, ssim_op, image_side, T_side, off_side):
     xyz_flat = xyz_grid.reshape(xyz_grid.shape[0], 3, -1)
 
     if not seq_aside:
+        if xy_crop is None:
+            assert width_cur == rgb.shape[-1]
+            assert height_cur == rgb.shape[-2]
         ## get relative pose
         T, R, t = relative_T(Ts)
         ## transform
         # reverse_tid = [target_id.index(i) for i in range(len(target_id))]
         # xyz_flat_transed = torch.stack( [torch.matmul(R[i], xyz_flat[i]) + t[i] for i in reverse_tid], dim=0)
-        rgb_recsts = wrap_xyz_group(xyz_flat, rgb, R, t, K_cur, width_cur, height_cur)
+        rgb_recsts = wrap_xyz_group(xyz_flat, rgb, R, t, K_cur)
         ## reprojection error
         reprj_errs = reproj_error_group(rgb_recsts, rgb, ssim_op)
     else:
+        if xy_crop is None:
+            assert width_cur == image_side.shape[-1]
+            assert height_cur == image_side.shape[-2]
+        ## get relative pose
         T, R, t = relative_T_to_side(Ts, T_side)
-        rgb_recsts = wrap_xyz_group_to_side(xyz_flat, rgb, R, t, K_cur, width_cur, height_cur, image_side)
+        rgb_recsts = wrap_xyz_group_to_side(xyz_flat, rgb, R, t, K_cur, image_side, xy_crop=xy_crop)
         # reprj_errs = reproj_error_group_to_side(rgb_recsts, rgb, ssim_op)
         reprj_errs = reproj_error_group_to_side_batch(rgb_recsts, rgb, ssim_op)
 
-    return rgb_recsts, reprj_errs
+    if isinstance(reprj_errs, list):
+        reprj_err_out = torch.cat(reprj_errs).mean()
+    else:
+        reprj_err_out = reprj_errs.mean()
 
-def wrap_xyz_group_to_side(xyz_flat, rgb, Rs, ts, K_cur, width, height, image_side):
+    return rgb_recsts, reprj_err_out
+
+def wrap_xyz_group_to_side(xyz_flat, rgb, Rs, ts, K_cur, image_side, xy_crop):
     batch_size = rgb.shape[0]
     side_size = image_side.shape[1]
 
@@ -88,12 +91,12 @@ def wrap_xyz_group_to_side(xyz_flat, rgb, Rs, ts, K_cur, width, height, image_si
         R_grouped = torch.stack(R_group, 0)
         t_grouped = torch.stack(t_group, 0)
 
-        rgb_recst = wrap_xyz(xyz_flat, R_grouped, t_grouped, K_cur, image_side[:, ic], rgb, width, height)  # B*C*H*W
+        rgb_recst = wrap_xyz(xyz_flat, R_grouped, t_grouped, K_cur, image_side[:, ic], rgb, xy_crop=xy_crop)  # B*C*H*W
         rgb_recsts.append(rgb_recst)
 
     return rgb_recsts
 
-def wrap_xyz_group(xyz_flat, rgb, Rs, ts, K_cur, width, height):
+def wrap_xyz_group(xyz_flat, rgb, Rs, ts, K_cur):
     batch_size = rgb.shape[0]
     assert batch_size >= 3
     n_center = batch_size - 3 + 1
@@ -103,21 +106,31 @@ def wrap_xyz_group(xyz_flat, rgb, Rs, ts, K_cur, width, height):
         ic = n_g + 1
         iT0 = 2*n_g
         iT1 = 2*n_g + 1
-        rgb_recst = wrap_xyz(xyz_flat[[ic]], Rs[iT0], ts[iT0], K_cur[[ic-1]], rgb[[ic-1]], rgb[[ic]], width, height)
+        rgb_recst = wrap_xyz(xyz_flat[[ic]], Rs[iT0], ts[iT0], K_cur[[ic-1]], rgb[[ic-1]], rgb[[ic]])
         rgb_recsts.append(rgb_recst)
         # reprj_loss = compute_reprojection_loss(rgb_recst, rgb[[ic]]) ## TODO: ssim
         # reprj_losses.append(reprj_loss)
-        rgb_recst = wrap_xyz(xyz_flat[[ic]], Rs[iT1], ts[iT1], K_cur[[ic+1]], rgb[[ic+1]], rgb[[ic]], width, height)
+        rgb_recst = wrap_xyz(xyz_flat[[ic]], Rs[iT1], ts[iT1], K_cur[[ic+1]], rgb[[ic+1]], rgb[[ic]])
         # reprj_loss = compute_reprojection_loss(rgb_recst, rgb[[ic]]) ## TODO: ssim
         # reprj_losses.append(reprj_loss)
         rgb_recsts.append(rgb_recst)
 
     return rgb_recsts
 
-def wrap_xyz(xyz, R, t, K, rgb_source, rgb_target, width, height, align_corner=True):
+def wrap_xyz(xyz, R, t, K, rgb_source, rgb_target, xy_crop=None, align_corner=True):
     xyz_trs = torch.matmul(R, xyz) + t
     uvz_trs = torch.matmul(K, xyz_trs)
     uv_trs = uvz_trs[:, :2] / uvz_trs[:, [2]]   ## matlab -1 is now in K in K_mat2py in dataset_kitti.py
+
+    if xy_crop is not None:
+        batch_size = uv_trs.shape[0]
+        x_start, y_start, x_size, y_size = xy_crop  # after unpacking, x_start, ... are all batched
+        uv_trs[:, 0] += x_start.reshape(batch_size, 1).to(dtype=torch.float32)
+        uv_trs[:, 1] += y_start.reshape(batch_size, 1).to(dtype=torch.float32)
+
+    width = rgb_source.shape[-1]
+    height = rgb_source.shape[-2]
+
     if align_corner:    # [0, w-1] -> [0, 1]
         uv_trs[:, 0] = uv_trs[:, 0] / (width - 1)
         uv_trs[:, 1] = uv_trs[:, 1] / (height - 1)

@@ -1,4 +1,5 @@
 import time
+import torch
 
 class TimingSingerLayer:
     def __init__(self, layer):
@@ -42,6 +43,11 @@ class Timing:
         assert name in self.timetemp
         print('{}: {:.5f}'.format(name, time.time() - self.timetemp[name]))
         del self.timetemp[name]
+
+    def log_cuda_sync(self):
+        self.log_temp('sync')
+        torch.cuda.synchronize()
+        self.log_temp_end('sync')
 
     # def log_init(self, name):
     #     self.start_name = name

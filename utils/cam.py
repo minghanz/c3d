@@ -1,15 +1,28 @@
 import torch
 import numpy as np
 import torch.nn as nn
+import torch.nn.functional as F
 import os
 from collections import Counter
+from PIL import Image
+# import skimage.transform
+import torchvision.transforms ## no need to call this since it calls PIL internally, but here the default is BILINEAR while PIL default is BICUBIC: 
+# https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.resize and https://pytorch.org/docs/stable/_modules/torchvision/transforms/functional.html#resize
+
+
+class InExtr:
+    def __init__(self):
+        self.width = None
+        self.height = None
+        self.K_unit = None
+        self.P_cam_li = None
 
 '''from bts/c3d_loss.py'''
 def gen_uv_grid(width, height, torch_mode):
     """
     return: uv_coords(2*H*W)
     """
-    meshgrid = np.meshgrid(range(width), range(height), indexing='xy')
+    meshgrid = np.meshgrid(range(int(width)), range(int(height)), indexing='xy')
     uv_grid = np.stack(meshgrid, axis=0).astype(np.float32) # 2*H*W
     if torch_mode:
         uv_grid = torch.from_numpy(uv_grid)
@@ -26,12 +39,12 @@ def xy1_from_uv(uv_grid, inv_K, torch_mode):
         batch_size = uv_grid.shape[0]
         if torch_mode:
             uv_flat = uv_grid.reshape(batch_size, 2, -1) # B*2*N
-            dummy_ones = torch.ones((batch_size, 1, uv_flat.shape[1]), dtype=uv_flat.dtype, device=uv_flat.device) # B*1*N
+            dummy_ones = torch.ones((batch_size, 1, uv_flat.shape[2]), dtype=uv_flat.dtype, device=uv_flat.device) # B*1*N
             uv1_flat = torch.cat((uv_flat, dummy_ones), dim=1) # B*3*N
             xy1_flat = torch.matmul(inv_K, uv1_flat)
         else:
             uv_flat = uv_grid.reshape(batch_size, 2, -1) # B*2*N
-            dummy_ones = np.ones((batch_size, 1, uv_flat.shape[1]), dtype=np.float32)
+            dummy_ones = np.ones((batch_size, 1, uv_flat.shape[2]), dtype=np.float32)
             uv1_flat = np.concatenate((uv_flat, dummy_ones), axis=1) # B*3*N
             xy1_flat = np.matmul(inv_K, uv1_flat)
 
@@ -52,16 +65,18 @@ def xy1_from_uv(uv_grid, inv_K, torch_mode):
     return uv1_flat, xy1_flat
 
 '''from bts/c3d_loss.py'''
-def set_from_intr(width, height, K_unit, batch_size, device=None, align_corner=True):
-
+def set_from_intr(width, height, K_unit, batch_size, device=None, align_corner=False):
+    '''
+    K_unit is nparray here.
+    '''
     to_torch = True
     uv_grid = gen_uv_grid(width, height, to_torch) # 2*H*W
 
     K = K_unit.copy()
     # effect_w = float(width - 1 if align_corner else width)
     # effect_h = float(height - 1 if align_corner else height)
-    scale_w, scale_h = scale_from_size(new_width=width, new_height=height)
-    K = scale_K(K, scale_w, scale_h)
+    scale_w, scale_h = scale_from_size(new_width=width, new_height=height, align_corner=align_corner)
+    K = scale_K(K, scale_w, scale_h, torch_mode=False)
 
     inv_K = np.linalg.inv(K)
     if to_torch:
@@ -87,7 +102,7 @@ def set_from_intr(width, height, K_unit, batch_size, device=None, align_corner=T
     if device is not None:
         K = K.to(device=device)
 
-    return uvb_grid, xy1_grid, width, height, K
+    return uvb_grid, xy1_grid, int(width), int(height), K
 
 def K_mat2py(K):
     '''
@@ -99,7 +114,7 @@ def K_mat2py(K):
     K_new[1, 2] -= 1
     return K_new
 
-def scale_from_size(old_width=2, old_height=2, new_width=2, new_height=2, align_corner=True):
+def scale_from_size(old_width=2, old_height=2, new_width=2, new_height=2, align_corner=False):
     '''
     A unit K is equivalent to the K of a 2*2 image
     '''
@@ -107,22 +122,170 @@ def scale_from_size(old_width=2, old_height=2, new_width=2, new_height=2, align_
     scale_h = (new_height - 1) / (old_height - 1) if align_corner else new_height / old_height
     return scale_w, scale_h
 
-def scale_K(K, scale_w, scale_h, align_corner=True):
+def scale_K(K, scale_w, scale_h, torch_mode, align_corner=False):
     '''
     generate new intrinsic matrix from original K and scale
     https://github.com/pytorch/pytorch/blob/5ac2593d4f2611480a5a9872e08024a665ae3c26/aten/src/ATen/native/cuda/UpSample.cuh
     see area_pixel_compute_source_index function
     '''
-    K_new = np.identity(3).astype(np.float32)
-    K_new[0, 0] = K[0, 0] * scale_w
-    K_new[1, 1] = K[1, 1] * scale_h
-    if align_corner:
-        K_new[0, 2] = scale_w * K[0, 2]
-        K_new[1, 2] = scale_h * K[1, 2]
+    if torch_mode:
+        K_new = K.clone().detach()
     else:
-        K_new[0, 2] = scale_w * (K[0, 2] + 0.5) - 0.5
-        K_new[1, 2] = scale_h * (K[1, 2] + 0.5) - 0.5
+        K_new = K.copy() #np.identity(3).astype(np.float32)
+    if len(K.shape) == 3:
+        K_new[:, 0, 0] = K[:, 0, 0] * scale_w
+        K_new[:, 1, 1] = K[:, 1, 1] * scale_h
+        if align_corner:
+            K_new[:, 0, 2] = scale_w * K[:, 0, 2]
+            K_new[:, 1, 2] = scale_h * K[:, 1, 2]
+        else:
+            K_new[:, 0, 2] = scale_w * (K[:, 0, 2] + 0.5) - 0.5
+            K_new[:, 1, 2] = scale_h * (K[:, 1, 2] + 0.5) - 0.5
+    else:
+        assert len(K.shape)==2
+        K_new[0, 0] = K[0, 0] * scale_w
+        K_new[1, 1] = K[1, 1] * scale_h
+        if align_corner:
+            K_new[0, 2] = scale_w * K[0, 2]
+            K_new[1, 2] = scale_h * K[1, 2]
+        else:
+            K_new[0, 2] = scale_w * (K[0, 2] + 0.5) - 0.5
+            K_new[1, 2] = scale_h * (K[1, 2] + 0.5) - 0.5
     return K_new
+
+def crop_K(K, w_start, h_start, torch_mode):
+    '''K is np array
+    '''
+    if torch_mode:
+        K_new = K.clone().detach()
+    else:
+        K_new = K.copy()
+    if len(K.shape) == 3:
+        K_new[:, 0, 2] -= w_start
+        K_new[:, 1, 2] -= h_start
+    else:
+        assert len(K.shape)==2
+        K_new[0, 2] -= w_start
+        K_new[1, 2] -= h_start
+    return K_new
+
+def crop_and_scale_K(K, xy_crop, scale, torch_mode, align_corner=False):
+    '''Find the intrinsic matrix equivalent to an image cropped and then scaled
+    '''
+    w_start = int(xy_crop[0])
+    h_start = int(xy_crop[1])
+    old_width = int(xy_crop[2])
+    old_height = int(xy_crop[3])
+
+    cropped_K = crop_K(K, w_start, h_start, torch_mode=torch_mode )
+
+    scaled_width = old_width * scale
+    scaled_height = old_height * scale
+    scale_w_crop, scale_h_crop = scale_from_size(old_width=old_width, old_height=old_height, new_width=scaled_width, new_height=scaled_height, align_corner=align_corner)
+    scaled_cropped_K = scale_K(cropped_K, scale_w_crop, scale_h_crop, torch_mode=torch_mode, align_corner=align_corner )
+
+    return scaled_cropped_K
+
+def np2Image(img_np, raw_float):
+    if raw_float:
+        assert img_np.dtype == np.float32
+        img_255 = img_np
+    else:
+        assert img_np.min() >= 0, 'img min should be at least 0'
+        if img_np.max() <= 1:
+            img_255 = np.round(img_np * 255).astype(np.uint8)
+        elif img_np.max() > 255:
+            raise ValueError("image max > 255, cannot process")
+        else:
+            img_255 = img_np.astype(np.uint8)
+
+    if img_255.shape[0] <= 3:
+        img_255 = img_255.transpose(1,2,0)
+
+    if raw_float:
+        Imode = 'F'
+    if len(img_255.shape) < 3:
+        Imode = 'L'
+    elif img_255.shape[2] == 1:
+        Imode = 'L'
+    elif img_255.shape[2] == 3:
+        Imode = 'RGB'
+    else:
+        raise ValueError("image shape unrecognized:", img_255.shape)
+
+    img = Image.fromarray(img_255, mode=Imode)
+    return img
+
+def scale_image(img, new_width, new_height, torch_mode, nearest, raw_float, align_corner=False):
+    ## TODO: we haven't specify align_corner behavior here. 
+    ## According to https://medium.com/@elagwoog/you-might-have-misundertood-the-meaning-of-align-corners-c681d0e38300, 
+    ## PIL's resizing is equivalent to align_corner=False
+
+    ## when torch_mode==True, can work with batch or not
+    ## when torch_mode==False, work with a single PIL.Image object
+
+    new_width = int(new_width)
+    new_height = int(new_height)
+    
+    if torch_mode:
+        if isinstance(img, np.ndarray):
+            fromback_np = True
+            img = torch.from_numpy(img.transpose(2, 0, 1).astype(np.float32))
+        else:
+            fromback_np = False
+        if nearest:
+            if len(img.shape) == 4:
+                # resized_img = scale_depth_torch_through_pil_batch(img, new_width, new_height, nearest=True) # 1
+                resized_img = F.interpolate(img, size=(new_height, new_width), scale_factor=None, mode='nearest', align_corners=align_corner)
+            else:
+                # resized_img = scale_depth_torch_through_pil(img, new_width, new_height, nearest=True, device=img.device)
+                resized_img = F.interpolate(img.unsqueeze(0), size=(new_height, new_width), scale_factor=None, mode='nearest', align_corners=align_corner).squeeze(0)
+        else:
+            if len(img.shape) == 4:
+                # resized_img = scale_depth_torch_through_pil_batch(img, new_width, new_height, nearest=False) # 1
+                resized_img = F.interpolate(img, size=(new_height, new_width), scale_factor=None, mode='bilinear', align_corners=align_corner)
+            else:
+                # resized_img = scale_depth_torch_through_pil(img, new_width, new_height, nearest=False, device=img.device)
+                resized_img = F.interpolate(img.unsqueeze(0), size=(new_height, new_width), scale_factor=None, mode='bilinear', align_corners=align_corner).squeeze(0)
+        if fromback_np:
+            resized_img = resized_img.numpy().transpose(1,2,0)
+    else:
+        if isinstance(img, np.ndarray):
+            img = np2Image(img, raw_float)
+        if nearest: 
+            resized_img = img.resize( (new_width, new_height), Image.NEAREST)
+        else:
+            resized_img = img.resize( (new_width, new_height), Image.BILINEAR) ## using BILINEAR is to be consistent to torchvision.transform.resize default
+
+        # resized_img = img.resize( (new_width, new_height), Image.NEAREST )
+        # https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.resize
+
+        # resized_img = skimage.transform.resize(img, (new_height, new_width), order=0, preserve_range=True, mode='constant', anti_aliasing=False)
+        # https://scikit-image.org/docs/dev/api/skimage.transform.html#skimage.transform.resize
+    return resized_img
+
+def scale_depth_torch_through_pil_batch(img, new_width, new_height, nearest):
+    single_list = []
+    for ib in range(img.shape[0]):
+        torch_img_resized = scale_depth_torch_through_pil(img[ib], new_width, new_height, nearest)
+        single_list.append(torch_img_resized)
+    resized_img = torch.stack(single_list, dim=0).to(device=img.device)
+    return resized_img
+
+def scale_depth_torch_through_pil(img, new_width, new_height, nearest, device=None):
+    pil_img = torchvision.transforms.ToPILImage(img)
+    if nearest:
+        pil_img_resized = torchvision.transforms.functional.resize(pil_img, (new_height, new_width), Image.NEAREST)
+    else:
+        pil_img_resized = torchvision.transforms.functional.resize(pil_img, (new_height, new_width), Image.BILINEAR)
+    ## do not use torchvision.transforms.functional.totensor because it changes scale:
+    ## https://pytorch.org/docs/stable/torchvision/transforms.html#torchvision.transforms.ToTensor
+    py_img_resized = np.array(pil_img_resized)
+    py_img_resized = py_img_resized.transpose(2, 0, 1)
+    torch_img_resized = torch.from_numpy(py_img_resized)
+    if device is not None:
+        torch_img_resized = torch_img_resized.to(device)
+    return torch_img_resized
 
 '''from bts/bts_pre_intr.py'''
 def sub2ind(matrixSize, rowSub, colSub):
@@ -132,41 +295,73 @@ def sub2ind(matrixSize, rowSub, colSub):
     return rowSub * (n-1) + colSub - 1
 
 '''from bts/bts_pre_intr.py'''
-def lidar_to_depth(velo, extr_cam_li, K_unit, im_shape, align_corner=True):
-    """extr_cam_li: 4x4, intr_K: 3x3"""
+def lidar_to_depth(velo, extr_cam_li, K_unit, im_shape, K_ready=None, torch_mode=False, align_corner=False):
+    """
+    if torch_mode==False, the inputs are np.array, non-batched, velo is N*4, extr_cam_li: 4x4, intr_K: 3x3
+    if torch_mode==True, the inputs are torch.tensor, can be batched (3-dim, first dim batch)
+    """
+    assert K_ready is None or K_unit is None
     ## recover K
-    intr_K = K_unit.copy()
-    # effect_w = float(im_shape[1] - 1 if align_corner else im_shape[1])
-    # effect_h = float(im_shape[0] - 1 if align_corner else im_shape[0])
-    scale_w, scale_h = scale_from_size(new_width=im_shape[1], new_height=im_shape[0])
-    intr_K = scale_K(intr_K, scale_w, scale_h)
+    if K_ready is None:
+        if torch_mode:
+            intr_K = K_unit.clone().detach()
+            scale_w, scale_h = scale_from_size(new_width=im_shape[1], new_height=im_shape[0], align_corner=align_corner)
+            intr_K = scale_K(intr_K, scale_w, scale_h, torch_mode=True, align_corner=align_corner)
+        else:
+            intr_K = K_unit.copy()
+            # effect_w = float(im_shape[1] - 1 if align_corner else im_shape[1])
+            # effect_h = float(im_shape[0] - 1 if align_corner else im_shape[0])
+            scale_w, scale_h = scale_from_size(new_width=im_shape[1], new_height=im_shape[0], align_corner=align_corner)
+            intr_K = scale_K(intr_K, scale_w, scale_h, torch_mode=False, align_corner=align_corner)
+    else:
+        intr_K = K_ready
 
     ## transform to camera frame
-    velo_in_cam_frame = np.dot(extr_cam_li, velo.T).T # N*4
-    velo_in_cam_frame = velo_in_cam_frame[:, :3] # N*3, xyz
-    velo_in_cam_frame = velo_in_cam_frame[velo_in_cam_frame[:, 2] > 0, :]  # keep forward points
+    if torch_mode:
+        if velo.shape[-1] == 3:
+            ## not homogeneous coord
+            R_cam_li = extr_cam_li[:3, :3]
+            t_cam_li = extr_cam_li[:3, 3:4]
+            velo_in_cam_frame = torch.matmul(R_cam_li, velo.transpose(-1, -2)) + t_cam_li # ...*3*N
+        else:
+            ## homogeneous coord
+            velo_in_cam_frame = torch.matmul(extr_cam_li, velo.transpose(-1, -2)) # ..*4*N
+    else:
+        velo_in_cam_frame = np.dot(extr_cam_li, velo.T) # 4*N
+
+    velo_in_cam_frame = velo_in_cam_frame[:3, :] # 3*N, xyz
+    velo_in_cam_frame = velo_in_cam_frame[:, velo_in_cam_frame[2, :] > 0]  # keep forward points
 
     ## project to image
-    velo_proj = np.dot(intr_K, velo_in_cam_frame.T).T
-    velo_proj[:, :2] = velo_proj[:, :2] / velo_proj[:, [2]]
-    velo_proj[:, :2] = np.round(velo_proj[:, :2])    # -1 is for kitti dataset aligning with its matlab script, now in K_mat2py
+    if torch_mode:
+        velo_proj = torch.matmul(intr_K, velo_in_cam_frame)
+        velo_proj[:2, :] = velo_proj[:2, :] / velo_proj[[2], :]
+        velo_proj[:2, :] = torch.round(velo_proj[:2, :])    # -1 is for kitti dataset aligning with its matlab script, now in K_mat2py
+    else:
+        velo_proj = np.dot(intr_K, velo_in_cam_frame)
+        velo_proj[:2, :] = velo_proj[:2, :] / velo_proj[[2], :]
+        velo_proj[:2, :] = np.round(velo_proj[:2, :])    # -1 is for kitti dataset aligning with its matlab script, now in K_mat2py
 
     ## crop out-of-view points
-    valid_idx = ( velo_proj[:, 0] > -0.5 ) & ( velo_proj[:, 0] < im_shape[1]-0.5 ) & ( velo_proj[:, 1] > -0.5 ) & ( velo_proj[:, 1] < im_shape[0]-0.5 )
-    velo_proj = velo_proj[valid_idx, :]
+    valid_idx = ( velo_proj[0, :] > -0.5 ) & ( velo_proj[0, :] < im_shape[1]-0.5 ) & ( velo_proj[1, :] > -0.5 ) & ( velo_proj[1, :] < im_shape[0]-0.5 )
+    velo_proj = velo_proj[:, valid_idx]
 
     ## compose depth image
-    depth_img = np.zeros((im_shape[:2]))
-    depth_img[velo_proj[:, 1].astype(np.int), velo_proj[:, 0].astype(np.int)] = velo_proj[:, 2]
+    if torch_mode:
+        depth_img = np.zeros((im_shape[:2]))
+        depth_img[velo_proj[1, :].to(dtype=int), velo_proj[0, :].to(dtype=int)] = velo_proj[2, :]
+    else:
+        depth_img = np.zeros((im_shape[:2]))
+        depth_img[velo_proj[1, :].astype(np.int), velo_proj[0, :].astype(np.int)] = velo_proj[2, :]
 
     ## find the duplicate points and choose the closest depth
-    velo_proj_lin = sub2ind(depth_img.shape, velo_proj[:, 1], velo_proj[:, 0])
+    velo_proj_lin = sub2ind(depth_img.shape, velo_proj[1, :], velo_proj[0, :])
     dupe_proj_lin = [item for item, count in Counter(velo_proj_lin).items() if count > 1]
     for dd in dupe_proj_lin:
         pts = np.where(velo_proj_lin == dd)[0]
-        x_loc = int(velo_proj[pts[0], 0])
-        y_loc = int(velo_proj[pts[0], 1])
-        depth_img[y_loc, x_loc] = velo_proj[pts, 2].min()
+        x_loc = int(velo_proj[0, pts[0]])
+        y_loc = int(velo_proj[1, pts[0]])
+        depth_img[y_loc, x_loc] = velo_proj[2, pts].min()
     depth_img[depth_img < 0] = 0
 
     return depth_img

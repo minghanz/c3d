@@ -218,9 +218,10 @@ def relative_T(Ts, seq_n, batch_size):
     
     return T, R, t, target_id
 
-class C3DLoss(CamProj):
-    def __init__(self, *args, **kwargs):
-        super(C3DLoss, self).__init__(*args, **kwargs)
+class C3DLoss(nn.Module):
+    def __init__(self, seq_frame_n=1):
+        super(C3DLoss, self).__init__()
+        self.seq_frame_n = seq_frame_n
 
         self.feat_inp_self = ["xyz", "hsv"]
         self.feat_inp_cross = ["xyz", "hsv"]
@@ -287,17 +288,11 @@ class C3DLoss(CamProj):
 
         return rest
 
-    def forward(self, rgb, depth, depth_gt, depth_mask, depth_gt_mask, date_side=None, xy_crop=None, intr=None, nkern_fname=None, Ts=None):
+    def forward(self, rgb, depth, depth_gt, depth_mask, depth_gt_mask, cam_info, nkern_fname=None, Ts=None):
         """
         rgb: B*3*H*W
         depth, depth_gt, depth_mask, depth_gt_mask: B*1*H*W
         """
-        assert date_side is not None or intr is not None
-        date_side = (date_side[0][0], int(date_side[1][0]) ) # originally it is a list. Take the first since the mini_batch share the same intrinsics. 
-
-        batch_size = rgb.shape[0]       ## if drop_last is False in Sampler/DataLoader, then the batch_size is not constant. 
-        
-        cam_info = self.prepare_cam_info(date_side, xy_crop, intr, batch_size, rgb.device)
 
         return self.forward_with_caminfo(rgb, depth, depth_gt, depth_mask, depth_gt_mask, nkern_fname, Ts, cam_info)
 
