@@ -8,7 +8,37 @@ from PIL import Image
 # import skimage.transform
 import torchvision.transforms ## no need to call this since it calls PIL internally, but here the default is BILINEAR while PIL default is BICUBIC: 
 # https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.resize and https://pytorch.org/docs/stable/_modules/torchvision/transforms/functional.html#resize
+from collections import namedtuple
 
+# class CamCrop:
+#     def __init__(self, x_start, y_start, x_size, y_size):
+#         self.x_start = x_start
+#         self.y_start = y_start
+#         self.x_start = x_start
+#         self.x_start = x_start
+        
+# class CamScale:
+#     def __init__(self, scale=None, new_width=None, new_height=None, align_corner=False):
+#         assert scale is None or (new_width is None and new_height is None)
+#         self.lock_ratio = scale is not None
+#         if self.lock_ratio:
+#             self.scale = scale
+#             self.new_width = None
+#             self.new_height = None
+#         else:
+#             self.scale = None
+#             self.new_width = new_width
+#             self.new_height = new_height
+#         self.align_corner = align_corner
+
+CamScale = namedtuple('CamScale', ['scale', 'new_width', 'new_height', 'align_corner'])
+CamCrop = namedtuple('CamCrop', ['x_start', 'y_start', 'x_size', 'y_size'])
+CamRotate = namedtuple('CamRotate', ['angle_deg', 'nearest'])
+
+def extract_single_op(cam_op, idx=0):
+    op_type = type(cam_op)
+    cam_op_single = op_type(*(cam_op_item[idx] for cam_op_item in cam_op))
+    return cam_op_single
 
 class InExtr:
     def __init__(self):
@@ -75,8 +105,8 @@ def set_from_intr(width, height, K_unit, batch_size, device=None, align_corner=F
     K = K_unit.copy()
     # effect_w = float(width - 1 if align_corner else width)
     # effect_h = float(height - 1 if align_corner else height)
-    scale_w, scale_h = scale_from_size(new_width=width, new_height=height, align_corner=align_corner)
-    K = scale_K(K, scale_w, scale_h, torch_mode=False)
+    # scale_w, scale_h = scale_from_size(new_width=width, new_height=height, align_corner=align_corner)
+    K = scale_K(K, new_width=width, new_height=height, align_corner=align_corner, torch_mode=False)
 
     inv_K = np.linalg.inv(K)
     if to_torch:
@@ -122,12 +152,15 @@ def scale_from_size(old_width=2, old_height=2, new_width=2, new_height=2, align_
     scale_h = (new_height - 1) / (old_height - 1) if align_corner else new_height / old_height
     return scale_w, scale_h
 
-def scale_K(K, scale_w, scale_h, torch_mode, align_corner=False):
+def scale_K(K, torch_mode, scale_w=None, scale_h=None, old_width=2, old_height=2, new_width=2, new_height=2, align_corner=False):
     '''
     generate new intrinsic matrix from original K and scale
     https://github.com/pytorch/pytorch/blob/5ac2593d4f2611480a5a9872e08024a665ae3c26/aten/src/ATen/native/cuda/UpSample.cuh
     see area_pixel_compute_source_index function
     '''
+    if scale_w is None:
+        scale_w, scale_h = scale_from_size(old_width, old_height, new_width, new_height, align_corner)
+
     if torch_mode:
         K_new = K.clone().detach()
     else:
@@ -169,7 +202,7 @@ def crop_K(K, w_start, h_start, torch_mode):
         K_new[1, 2] -= h_start
     return K_new
 
-def crop_and_scale_K(K, xy_crop, scale, torch_mode, align_corner=False):
+def crop_and_scale_K(K, xy_crop, torch_mode, scale=None, new_width=None, new_height=None, align_corner=False):
     '''Find the intrinsic matrix equivalent to an image cropped and then scaled
     '''
     w_start = int(xy_crop[0])
@@ -179,10 +212,11 @@ def crop_and_scale_K(K, xy_crop, scale, torch_mode, align_corner=False):
 
     cropped_K = crop_K(K, w_start, h_start, torch_mode=torch_mode )
 
-    scaled_width = old_width * scale
-    scaled_height = old_height * scale
-    scale_w_crop, scale_h_crop = scale_from_size(old_width=old_width, old_height=old_height, new_width=scaled_width, new_height=scaled_height, align_corner=align_corner)
-    scaled_cropped_K = scale_K(cropped_K, scale_w_crop, scale_h_crop, torch_mode=torch_mode, align_corner=align_corner )
+    if new_width is None:
+        new_width = old_width * scale
+        new_height = old_height * scale
+    # scale_w_crop, scale_h_crop = scale_from_size(old_width=old_width, old_height=old_height, new_width=new_width, new_height=new_height, align_corner=align_corner)
+    scaled_cropped_K = scale_K(cropped_K, old_width=old_width, old_height=old_height, new_width=new_width, new_height=new_height, torch_mode=torch_mode, align_corner=align_corner )
 
     return scaled_cropped_K
 
@@ -228,11 +262,15 @@ def scale_image(img, new_width, new_height, torch_mode, nearest, raw_float, alig
     new_height = int(new_height)
     
     if torch_mode:
+        from_pil = False
+        from_np = False
         if isinstance(img, np.ndarray):
-            fromback_np = True
+            from_np = True
             img = torch.from_numpy(img.transpose(2, 0, 1).astype(np.float32))
-        else:
-            fromback_np = False
+        if isinstance(img, Image.Image):
+            from_pil = True
+            img = np.array(img)
+            img = torch.from_numpy(img.transpose(2, 0, 1).astype(np.float32))
         if nearest:
             if len(img.shape) == 4:
                 # resized_img = scale_depth_torch_through_pil_batch(img, new_width, new_height, nearest=True) # 1
@@ -247,8 +285,11 @@ def scale_image(img, new_width, new_height, torch_mode, nearest, raw_float, alig
             else:
                 # resized_img = scale_depth_torch_through_pil(img, new_width, new_height, nearest=False, device=img.device)
                 resized_img = F.interpolate(img.unsqueeze(0), size=(new_height, new_width), scale_factor=None, mode='bilinear', align_corners=align_corner).squeeze(0)
-        if fromback_np:
+        if from_np:
             resized_img = resized_img.numpy().transpose(1,2,0)
+        if from_pil:        ## do not return to PIL.Image.Image
+            resized_img = resized_img.numpy().transpose(1,2,0)
+
     else:
         if isinstance(img, np.ndarray):
             img = np2Image(img, raw_float)
@@ -287,6 +328,23 @@ def scale_depth_torch_through_pil(img, new_width, new_height, nearest, device=No
         torch_img_resized = torch_img_resized.to(device)
     return torch_img_resized
 
+def scale_depth_from_lidar(velo, extr_cam_li, K_ori, new_width, new_height, old_width=2, old_height=2, align_corner=False):
+    new_width = int(new_width)
+    new_height = int(new_height)
+    # scale_w, scale_h = scale_from_size(old_width, old_height, new_width, new_height, align_corner)
+    K = scale_K(K_ori, old_width=old_width, old_height=old_height, new_width=new_width, new_height=new_height, align_corner=align_corner, torch_mode=False)
+
+    depth_gt_scaled = lidar_to_depth(velo, extr_cam_li, im_shape=(new_height, new_width), K_ready=K, K_unit=None)
+    return depth_gt_scaled
+
+def crop_and_scale_depth_from_lidar(velo, extr_cam_li, K_ori, xy_crop, new_width, new_height, align_corner=False):
+    new_width = int(new_width)
+    new_height = int(new_height)
+    scaled_cropped_K = crop_and_scale_K(K_ori, xy_crop, scale=None, new_width=new_width, new_height=new_height, torch_mode=False)
+    
+    depth_gt_scaled = lidar_to_depth(velo, extr_cam_li, im_shape=(new_height, new_width), K_ready=scaled_cropped_K, K_unit=None)
+    return depth_gt_scaled
+
 '''from bts/bts_pre_intr.py'''
 def sub2ind(matrixSize, rowSub, colSub):
     """Convert row, col matrix subscripts to linear indices
@@ -305,14 +363,14 @@ def lidar_to_depth(velo, extr_cam_li, K_unit, im_shape, K_ready=None, torch_mode
     if K_ready is None:
         if torch_mode:
             intr_K = K_unit.clone().detach()
-            scale_w, scale_h = scale_from_size(new_width=im_shape[1], new_height=im_shape[0], align_corner=align_corner)
-            intr_K = scale_K(intr_K, scale_w, scale_h, torch_mode=True, align_corner=align_corner)
+            # scale_w, scale_h = scale_from_size(new_width=im_shape[1], new_height=im_shape[0], align_corner=align_corner)
+            intr_K = scale_K(intr_K, new_width=im_shape[1], new_height=im_shape[0], torch_mode=True, align_corner=align_corner)
         else:
             intr_K = K_unit.copy()
             # effect_w = float(im_shape[1] - 1 if align_corner else im_shape[1])
             # effect_h = float(im_shape[0] - 1 if align_corner else im_shape[0])
-            scale_w, scale_h = scale_from_size(new_width=im_shape[1], new_height=im_shape[0], align_corner=align_corner)
-            intr_K = scale_K(intr_K, scale_w, scale_h, torch_mode=False, align_corner=align_corner)
+            # scale_w, scale_h = scale_from_size(new_width=im_shape[1], new_height=im_shape[0], align_corner=align_corner)
+            intr_K = scale_K(intr_K, new_width=im_shape[1], new_height=im_shape[0], torch_mode=False, align_corner=align_corner)
     else:
         intr_K = K_ready
 

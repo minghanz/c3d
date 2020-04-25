@@ -51,8 +51,8 @@ def preload_K(data_root, align_corner=False):
             K = K_mat2py(K)
             # effect_w = float(im_shape[1] - 1 if align_corner else im_shape[1])
             # effect_h = float(im_shape[0] - 1 if align_corner else im_shape[0])
-            scale_w, scale_h = scale_from_size(old_width=im_shape[1], old_height=im_shape[0], align_corner=align_corner)
-            K_unit = scale_K(K, scale_w, scale_h, torch_mode=False, align_corner=align_corner)
+            # scale_w, scale_h = scale_from_size(old_width=im_shape[1], old_height=im_shape[0], align_corner=align_corner)
+            K_unit = scale_K(K, old_width=im_shape[1], old_height=im_shape[0], torch_mode=False, align_corner=align_corner)
 
             K_dict[(date, side)].width = im_shape[1]
             K_dict[(date, side)].height = im_shape[0]

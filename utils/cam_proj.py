@@ -2,6 +2,7 @@ import os
 import numpy as np 
 
 from torch._six import int_classes
+import torch
 
 from .dataset_kitti import *
 from .cam import *
@@ -32,9 +33,25 @@ class CamInfo(nn.Module):
     def unpack(self):
         return self.K, self.width, self.height, self.xy1_grid, self.uvb_grid
 
-    def scale(self, new_width, new_height, align_corner=False):
-        scale_w, scale_h = scale_from_size(old_width=self.width, old_height=self.height, new_width=new_width, new_height=new_height, align_corner=align_corner)
-        K_scaled = scale_K(self.K, scale_w, scale_h, torch_mode=True, align_corner=align_corner)
+    # def scale(self, new_width, new_height, align_corner=False):
+    #     if not isinstance(new_width, (float, np.float, int_classes)):
+    #         assert isinstance(new_width, torch.Tensor)
+    #         new_width = new_width[0]
+    #         new_height = new_height[0]
+    #         assert isinstance(new_width, (float, np.float, int_classes))
+    def scale(self, scale_op):
+        if isinstance(scale_op.new_height, torch.Tensor):
+            scale_op = extract_single_op(scale_op)
+        new_width = scale_op.new_width
+        new_height = scale_op.new_height
+        align_corner = scale_op.align_corner
+        if scale_op.scale is not None and scale_op.scale != 0 and new_width is not None and new_height is not None:
+            assert new_width == int(self.width * scale_op.scale)
+            assert new_height == int(self.height * scale_op.scale)
+
+
+        # scale_w, scale_h = scale_from_size(old_width=self.width, old_height=self.height, new_width=new_width, new_height=new_height, align_corner=align_corner)
+        K_scaled = scale_K(self.K, old_width=self.width, old_height=self.height, new_width=new_width, new_height=new_height, torch_mode=True, align_corner=align_corner)
         uvb_grid_scaled = self.uvb_grid[..., :int(new_height), :int(new_width)]
 
         uv_grid = uvb_grid_scaled[:, :2]
@@ -54,7 +71,9 @@ class CamInfo(nn.Module):
         uvb_grid_cur = self.uvb_grid
         K_cur = self.K
 
-        batch_sep = not(isinstance(xy_crop[0], float) or isinstance(xy_crop[0], int_classes)) 
+        batch_sep = not isinstance(xy_crop[0], (float, np.float32, int_classes))
+        if batch_sep:
+            assert isinstance(xy_crop[0], torch.Tensor)
         if batch_sep:
             batch_size = xy_crop[0].shape[0]
             ## In case the batch_size is not constant as originally set
@@ -86,6 +105,18 @@ class CamInfo(nn.Module):
         
         cam_info = CamInfo(K_crop, x_size, y_size, xy1_grid_crop, uvb_grid_crop, self.P_cam_li)
         return cam_info
+
+def seq_ops_on_cam_info(cam_info, cam_ops_list):
+    for cam_op in cam_ops_list:
+        if isinstance(cam_op, CamCrop):
+            cam_info = cam_info.crop(cam_op)
+        elif isinstance(cam_op, CamScale):
+            cam_info = cam_info.scale(cam_op)
+        elif isinstance(cam_op, CamRotate):
+            raise ValueError("Not implemented yet! ")
+        else:
+            raise ValueError("op not recognized!", type(cam_op))
+    return cam_info
 
 class CamProj(nn.Module):
     def __init__(self, data_root, batch_size=None):

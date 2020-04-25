@@ -20,7 +20,7 @@ def vis_depth_np(depth, ref_depth=10):        ## why normalize_result in bts_mai
     return inv_depth
 
 '''from bts/bts_utils.py'''
-def overlay_dep_on_rgb(depth, img, path=None, name=None, overlay=False):
+def overlay_dep_on_rgb(depth, img, path=None, name=None, overlay=True):
     ''' both 3-dim: C*H*W. not including batch
     dep: output from vis_depth
     both are torch.tensor, between 0~1
@@ -30,7 +30,7 @@ def overlay_dep_on_rgb(depth, img, path=None, name=None, overlay=False):
     return overlay_dep_on_rgb_np(dep_np, img_np, path, name, overlay)
 
 '''from bts/bts_utils.py'''
-def overlay_dep_on_rgb_np(dep_np, img_np, path=None, name=None, overlay=False):
+def overlay_dep_on_rgb_np(dep_np, img_np, path=None, name=None, overlay=True):
     ''' both 3-dim: H*W*C.
     both are np.array, between 0~1
     '''
