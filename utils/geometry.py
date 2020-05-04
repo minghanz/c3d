@@ -3,6 +3,21 @@ import torch.nn.functional as F
 
 from ..cvo_funcs import *
 
+def get_stat_lidar_dist(norm_sq):   # 4*2*N
+    norm_L2 = torch.sqrt(norm_sq)
+    norm_L2 = norm_L2.reshape(8, -1) # 8*N
+    norm_L2_max, _ = norm_L2.max(dim=0, keepdim=True)
+
+    norm_L2_altered = norm_L2.clone()
+    norm_L2_altered[norm_L2_altered==0] = 1000
+    norm_L2_altered[:, norm_L2_max[0]==0] = 0
+    norm_L2_min, _ = norm_L2_altered.min(dim=0, keepdim=True)
+
+    norm_L2_mean = norm_L2.sum(dim=0, keepdim=True) / ((norm_L2 > 0).sum(dim=0, keepdim=True).to(dtype=torch.float32)+1e-8) # 1*N
+
+    norm_L2_stat = torch.stack([norm_L2_min, norm_L2_max, norm_L2_mean], dim=1) # 1*3*N
+    return norm_L2_stat
+
 '''from monodepth2/cvo_utils.py'''
 def recall_grad(pre_info, grad):
     # print(pre_info, grad)
@@ -10,7 +25,7 @@ def recall_grad(pre_info, grad):
     assert not torch.isnan(grad).any(), pre_info
 
 '''from monodepth2/cvo_utils.py'''
-def calc_normal(pts, grid_source, grid_valid, neighbor_range, ignore_ib, min_dist_2=0.05):
+def calc_normal(pts, grid_source, grid_valid, neighbor_range, ignore_ib, min_dist_2=0.05, return_stat=False):
     raw_normals, norm_sq = PtSampleInGridCalcNormal.apply(pts.contiguous(), grid_source.contiguous(), grid_valid.contiguous(), neighbor_range, ignore_ib) ## raw_normals is 4*C*N, and norm_sq is 4*2*N
 
     if raw_normals.requires_grad:
@@ -18,6 +33,11 @@ def calc_normal(pts, grid_source, grid_valid, neighbor_range, ignore_ib, min_dis
 
     # raw_normals = torch.ones((4,3,pts.shape[-1]), device=grid_source.device, dtype=grid_source.dtype)
     # norm_sq = torch.ones((4,2,pts.shape[-1]), device=grid_source.device, dtype=grid_source.dtype)
+
+    ##################### inspection of lidar point density
+    if return_stat:
+        norm_L2_stat = get_stat_lidar_dist(norm_sq)
+    #######################################################
 
     normed_normal = F.normalize(raw_normals, p=2, dim=1) # 4*C*N
 
@@ -67,7 +87,10 @@ def calc_normal(pts, grid_source, grid_valid, neighbor_range, ignore_ib, min_dis
 
     ## weighted_normal is unit length normal vectors 1*C*N; res_final in [0,1], 1*1*N
     ## some vectors in weighted_normal could be zero if no neighboring pixels are found
-    return weighted_normal, res_final
+    if return_stat:
+        return weighted_normal, res_final, norm_L2_stat
+    else:
+        return weighted_normal, res_final
 
 '''from monodepth2/cvo_utils.py'''
 def res_normal_dense(xyz, normal, K):

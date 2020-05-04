@@ -80,7 +80,7 @@ def load_simp_pc3d(pcl_c3d, mask_grid, uvb_flat, feat_grid, feat_flat):
 
     return pcl_c3d
 
-def load_pc3d(pcl_c3d, depth_grid, mask_grid, xy1_grid, uvb_flat, K_cur, feat_comm_grid, feat_comm_flat, sparse, use_normal, sparse_nml_opts=None, dense_nml_op=None):
+def load_pc3d(pcl_c3d, depth_grid, mask_grid, xy1_grid, uvb_flat, K_cur, feat_comm_grid, feat_comm_flat, sparse, use_normal, sparse_nml_opts=None, dense_nml_op=None, return_stat=False):
     assert not (sparse_nml_opts is None and dense_nml_op is None)
     """sparse is a bool
     """
@@ -115,12 +115,20 @@ def load_pc3d(pcl_c3d, depth_grid, mask_grid, xy1_grid, uvb_flat, K_cur, feat_co
 
     ## normal for sparse
     if use_normal>0 and sparse:
-        normal_flat, nres_flat = calc_normal(pcl_c3d.flat.uvb, xyz_grid, mask_grid, sparse_nml_opts.normal_nrange, sparse_nml_opts.ignore_ib, sparse_nml_opts.min_dist_2)
+        if return_stat:
+            normal_flat, nres_flat, dist_stat_flat = calc_normal(pcl_c3d.flat.uvb, xyz_grid, mask_grid, sparse_nml_opts.normal_nrange, sparse_nml_opts.ignore_ib, sparse_nml_opts.min_dist_2, return_stat=return_stat)
+        else:
+            normal_flat, nres_flat = calc_normal(pcl_c3d.flat.uvb, xyz_grid, mask_grid, sparse_nml_opts.normal_nrange, sparse_nml_opts.ignore_ib, sparse_nml_opts.min_dist_2, return_stat=return_stat)
+
         ## TODO: How to deal with points with no normal?
         uvb_split = pcl_c3d.flat.uvb.to(dtype=torch.long).squeeze(0).transpose(0,1).split(1,dim=1) # a tuple of 3 elements of tensor N*1, only long/byte/bool tensors can be used as indices
         grid_xyz_shape = xyz_grid.shape
         normal_grid = grid_from_concat_flat_func(uvb_split, normal_flat, grid_xyz_shape)
         nres_grid = grid_from_concat_flat_func(uvb_split, nres_flat, grid_xyz_shape)
+        if return_stat:
+            dist_stat_grid = grid_from_concat_flat_func(uvb_split, dist_stat_flat, grid_xyz_shape)
+            pcl_c3d.flat.feature['dist_stat'] = dist_stat_flat
+            pcl_c3d.grid.feature['dist_stat'] = dist_stat_grid
 
         pcl_c3d.flat.feature['normal'] = normal_flat
         pcl_c3d.flat.feature['nres'] = nres_flat
@@ -256,6 +264,8 @@ class C3DLoss(nn.Module):
                             help="the minimum value for the normal kernel (or viewing it as a coefficient of geometric kernel)")
         parser.add_argument("--res_mag_max",           type=float, default=2,
                             help="the maximum value for the normal kernel (or viewing it as a coefficient of geometric kernel)")
+        parser.add_argument("--norm_return_stat",      action="store_true", 
+                            help="if set, calc_normal (for sparse) function will return statistics in terms of point distance")
 
         parser.add_argument("--neighbor_range",        type=int, default=2,
                             help="neighbor range when calculating inner product")
@@ -319,8 +329,10 @@ class C3DLoss(nn.Module):
         feat_comm_flat['hsv'] = hsv_flat
         
         ## generate PCL_C3D object
-        self.pc3ds["gt"] = load_pc3d(self.pc3ds["gt"], depth_gt, depth_gt_mask, xy1_grid_cur, uvb_flat_cur, K_cur, feat_comm_grid, feat_comm_flat, sparse=True, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts)
-        self.pc3ds["pred"] = load_pc3d(self.pc3ds["pred"], depth, depth_mask, xy1_grid_cur, uvb_flat_cur, K_cur, feat_comm_grid, feat_comm_flat, sparse=False, use_normal=self.opts.use_normal, dense_nml_op=self.normal_op_dense)
+        self.pc3ds["gt"] = load_pc3d(self.pc3ds["gt"], depth_gt, depth_gt_mask, xy1_grid_cur, uvb_flat_cur, K_cur, feat_comm_grid, feat_comm_flat, 
+                                        sparse=True, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts, return_stat=self.opts.norm_return_stat)
+        self.pc3ds["pred"] = load_pc3d(self.pc3ds["pred"], depth, depth_mask, xy1_grid_cur, uvb_flat_cur, K_cur, feat_comm_grid, feat_comm_flat, 
+                                        sparse=False, use_normal=self.opts.use_normal, dense_nml_op=self.normal_op_dense, return_stat=self.opts.norm_return_stat)
 
         self.flag_cross_frame = Ts is not None and self.seq_frame_n > 1 and self.opts.cross_gt_pred_weight > 0
         self.flag_cross_frame_predpred = Ts is not None and self.seq_frame_n > 1 and self.opts.cross_pred_pred_weight > 0
@@ -359,7 +371,7 @@ class C3DLoss(nn.Module):
         return inp_total
     
     def calc_inn_pc3d(self, pc3d_flat, pc3d_grid, ell, nkern_fname=None):
-        assert pc3d_flat.feature.keys() == pc3d_grid.feature.keys()
+        # assert pc3d_flat.feature.keys() == pc3d_grid.feature.keys()
 
         inp_feat_dict = {}
 
@@ -388,7 +400,8 @@ class C3DLoss(nn.Module):
             elif feat == "seman": 
                 pass
             else:
-                raise ValueError("feature {} not recognized".format(feat))
+                print('{} feature passed in calc_inn_pc3d'.format(feat))
+                # raise ValueError("feature {} not recognized".format(feat))
                     
         inp = torch.prod( torch.cat([inp_feat_dict[feat] for feat in inp_feat_dict], dim=0), dim=0).sum()
 
