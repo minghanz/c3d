@@ -7,7 +7,7 @@ import sys
 # script_path = os.path.dirname(__file__)
 # sys.path.append(os.path.join(script_path, '../../pytorch-unet'))
 # from geometry import rgb_to_hsv
-from .utils.color import rgb_to_hsv
+from .utils_general.color import rgb_to_hsv
 
 # sys.path.append(os.path.join(script_path, '../../monodepth2'))
 # from cvo_utils import *

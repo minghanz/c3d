@@ -1,6 +1,10 @@
 import torch
 import numpy as np 
+
 import cv2
+from PIL import Image   ## PIL cannot handle save uint16 png, use cv2 or imageio
+import imageio
+
 import os
 from .color import rgbmap
 
@@ -12,16 +16,49 @@ def mask_from_dep_np(depth):
     return dep_mask
 
 def uint8_np_from_img_tensor(img):
-    assert img.min() >= 0
-    img_np = img.cpu().detach().numpy().transpose(1,2,0)
-    # img_np = img.permute(1,2,0).cpu().detach().numpy() # equivalent to above line
+    if img.ndim == 4:
+        img_np = img.cpu().detach().numpy().transpose(0,2,3,1)
+    else:
+        assert img.ndim == 3
+        img_np = img.cpu().detach().numpy().transpose(1,2,0)
+        # img_np = img.permute(1,2,0).cpu().detach().numpy() # equivalent to above line
     img_np = uint8_np_from_img_np(img_np)
+    img_np = img_np.squeeze()
     return img_np
 
 def uint8_np_from_img_np(img_np):
+    img_min = img_np.min()
+    assert img_min >= -1e-5
+    if img_min < 0:
+        img_np[img_np < 0] = 0
+
     if img_np.max() <= 1:
         img_np = img_np * 255
-    img_np = img_np.astype(np.uint8)
+    img_np = np.round(img_np).astype(np.uint8)
+    return img_np
+
+def uint16_np_from_img_tensor(img):
+    # img = img.squeeze()
+    if img.ndim == 4:
+        img_np = img.cpu().detach().numpy().transpose(0,2,3,1)
+    else:
+        assert img.ndim == 3
+        img_np = img.cpu().detach().numpy().transpose(1,2,0)
+    img_np = uint16_np_from_img_np(img_np)
+    img_np = img_np.squeeze()
+    return img_np
+
+def uint16_np_from_img_np(img_np):
+    img_min = img_np.min()
+    assert img_min >= -1e-5
+    if img_min < 0:
+        img_np[img_np < 0] = 0
+
+    if img_np.max() <= 1:
+        img_np = img_np * 255.0
+    if img_np.max() < 255:
+        img_np = img_np * 256.0
+    img_np = np.round(img_np).astype(np.uint16)
     return img_np
 
 def vis_normal(normal):
@@ -139,3 +176,69 @@ def overlay_dep_on_rgb_np(dep_255, img_np, path=None, name=None, overlay=True):
         # cv2.imwrite(full_path, dep_mask)
 
     return img_dep
+
+
+'''
+The conversion of nparrays are in vis.py. This function does not alter the content of arrays.
+'''
+def save_np_to_img(np_img, filename):
+    '''
+    np_img: H*W*C or B*H*W*C
+    mode: 
+    '''
+    verbose = False
+    ### determine batched
+    has_cnl_dim = np_img.shape[-1] <= 3
+    if has_cnl_dim:
+        batched = np_img.ndim == 4
+        if not batched:
+            assert np_img.ndim == 3
+    else:
+        batched = np_img.ndim == 3
+        if not batched:
+            assert np_img.ndim == 2
+    vprint(verbose, batched, filename)
+    ### determine mode
+    if np_img.max() > 255:
+        vprint(verbose, 'uint16 mode')
+        mode = 'u16'
+        assert np_img.dtype == np.uint16
+    else:
+        vprint(verbose, 'uint8 mode')
+        mode = 'u8'
+        assert np_img.dtype == np.uint8
+
+    ### save
+    if batched:
+        for ib in range(np_img.shape[0]):
+            fname_cur = filename + '_{}.png'.format(ib) 
+            save_np_img_single(np_img[ib], fname_cur, mode)
+    else:
+        save_np_img_single(np_img, filename+'.png', mode)
+
+def save_np_img_single(np_img, filename, mode):
+    assert mode in ['u16', 'u8']
+    if mode == 'u16':
+        # ### use opencv
+        # cv2.imwrite(filename, np_img)
+        ### or use imageio
+        imageio.imwrite(filename, np_img)
+        ### above two both accept H*W or H*W*1 grayscale image
+    else:
+        # ### use opencv
+        # cv2.imwrite(filename, np_img)
+        ### or use PIL.Image. For grayscale image ony H*W is accepted
+        if np_img.ndim == 2:
+            img = Image.fromarray(np_img, mode='L')
+        elif np_img.ndim == 3 and np_img.shape[-1] == 1:
+            img = Image.fromarray(np_img[..., 0], mode='L')
+        elif np_img.ndim == 3 and np_img.shape[-1] != 1:
+            img = Image.fromarray(np_img, mode='RGB')
+        else: 
+            raise ValueError(img.shape, 'shape cannot be handled')
+        img.save(filename)
+    return 
+
+def vprint(verbose, *args, **kwargs):
+    if verbose:
+        print(*args, **kwargs)
