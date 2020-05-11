@@ -1,6 +1,10 @@
 # c3d
 Package for computing Continuous 3D Loss. This package implements the C3D loss (continuous 3D loss) in the paper [Monocular Depth Prediction Through Continuous 3D Loss](https://arxiv.org/abs/2003.09763). 
 
+Video Demo: 
+
+[![Screenshot](https://img.youtube.com/vi/gDfAfD4yHuM/maxresdefault.jpg)](https://youtu.be/gDfAfD4yHuM)
+
 ## Overview
 The interface for using the C3D loss is the `C3DLoss` class in `c3d_loss.py`. You can import the class to your script to augment your own depth prediction project with C3D loss. The implementation of its operations are in `cvo_funcs.py` and `cvo_ops` folder. The class also needs some other util classes to run properly, which you can find in `utils` folder. 
 
