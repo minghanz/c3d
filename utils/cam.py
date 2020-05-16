@@ -353,11 +353,18 @@ def sub2ind(matrixSize, rowSub, colSub):
     return rowSub * (n-1) + colSub - 1
 
 '''from bts/bts_pre_intr.py'''
-def lidar_to_depth(velo, extr_cam_li, K_unit, im_shape, K_ready=None, torch_mode=False, align_corner=False):
+def lidar_to_depth(velo, extr_cam_li, K_unit, im_shape, K_ready=None, torch_mode=False, align_corner=False, dep_dim_pre_proj=2):
     """
     if torch_mode==False, the inputs are np.array, non-batched, velo is N*4, extr_cam_li: 4x4, intr_K: 3x3
     if torch_mode==True, the inputs are torch.tensor, can be batched (3-dim, first dim batch)
     """
+    velo_proj = lidar_to_proj_pts(velo, extr_cam_li, K_unit, im_shape, K_ready, torch_mode, align_corner, dep_dim_pre_proj)
+
+    depth_img = projected_pts_to_img(velo_proj, im_shape, torch_mode)
+
+    return depth_img
+
+def lidar_to_proj_pts(velo, extr_cam_li, K_unit, im_shape, K_ready=None, torch_mode=False, align_corner=False, dep_dim_pre_proj=2):
     assert K_ready is None or K_unit is None
     ## recover K
     if K_ready is None:
@@ -388,7 +395,7 @@ def lidar_to_depth(velo, extr_cam_li, K_unit, im_shape, K_ready=None, torch_mode
         velo_in_cam_frame = np.dot(extr_cam_li, velo.T) # 4*N
 
     velo_in_cam_frame = velo_in_cam_frame[:3, :] # 3*N, xyz
-    velo_in_cam_frame = velo_in_cam_frame[:, velo_in_cam_frame[2, :] > 0]  # keep forward points
+    velo_in_cam_frame = velo_in_cam_frame[:, velo_in_cam_frame[dep_dim_pre_proj, :] > 0]  # keep forward points
 
     ## project to image
     if torch_mode:
@@ -399,6 +406,14 @@ def lidar_to_depth(velo, extr_cam_li, K_unit, im_shape, K_ready=None, torch_mode
         velo_proj = np.dot(intr_K, velo_in_cam_frame)
         velo_proj[:2, :] = velo_proj[:2, :] / velo_proj[[2], :]
         velo_proj[:2, :] = np.round(velo_proj[:2, :])    # -1 is for kitti dataset aligning with its matlab script, now in K_mat2py
+
+    ## crop out-of-view points
+    valid_idx = ( velo_proj[0, :] > -0.5 ) & ( velo_proj[0, :] < im_shape[1]-0.5 ) & ( velo_proj[1, :] > -0.5 ) & ( velo_proj[1, :] < im_shape[0]-0.5 )
+    velo_proj = velo_proj[:, valid_idx]
+    
+    return velo_proj
+
+def projected_pts_to_img(velo_proj, im_shape, torch_mode):
 
     ## crop out-of-view points
     valid_idx = ( velo_proj[0, :] > -0.5 ) & ( velo_proj[0, :] < im_shape[1]-0.5 ) & ( velo_proj[1, :] > -0.5 ) & ( velo_proj[1, :] < im_shape[0]-0.5 )
@@ -421,5 +436,4 @@ def lidar_to_depth(velo, extr_cam_li, K_unit, im_shape, K_ready=None, torch_mode
         y_loc = int(velo_proj[1, pts[0]])
         depth_img[y_loc, x_loc] = velo_proj[2, pts].min()
     depth_img[depth_img < 0] = 0
-
     return depth_img
