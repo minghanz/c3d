@@ -4,27 +4,7 @@ import os
 
 from .cam import scale_K, K_mat2py, scale_from_size, InExtr
 
-'''from bts/c3d_loss.py'''
-def read_calib_file(path):
-    """Read KITTI calibration file
-    (from https://github.com/hunse/kitti)
-    """
-    float_chars = set("0123456789.e+- ")
-    data = {}
-    with open(path, 'r') as f:
-        for line in f.readlines():
-            key, value = line.split(':', 1)
-            value = value.strip()
-            data[key] = value
-            if float_chars.issuperset(value):
-                # try to cast to float array
-                try:
-                    data[key] = np.array(list(map(float, value.split(' '))))
-                except ValueError:
-                    # casting error: data[key] already eq. value, so pass
-                    pass
-
-    return data
+from ..utils_general.io import read_calib_file
 
 '''from bts/c3d_loss.py, bts_pre_intr.py'''
 def preload_K(data_root, align_corner=False):
@@ -75,11 +55,3 @@ def preload_K(data_root, align_corner=False):
             K_dict[(date, side)].P_cam_li = P_rect_li 
     return K_dict
     
-'''from bts/bts_pre_intr.py'''
-def load_velodyne_points(filename):
-    """Load 3D point cloud from KITTI file format
-    (adapted from https://github.com/hunse/kitti)
-    """
-    points = np.fromfile(filename, dtype=np.float32).reshape(-1, 4)
-    points[:, 3] = 1.0  # homogeneous
-    return points
