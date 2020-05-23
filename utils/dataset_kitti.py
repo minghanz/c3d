@@ -2,8 +2,8 @@ import numpy as np
 import os
 # from easydict import EasyDict
 
-from .cam import scale_K, K_mat2py, scale_from_size, InExtr
-
+from ..utils_general.calib import scale_K, scale_from_size
+from ..utils_general.calib import InExtr, K_mat2py
 from ..utils_general.io import read_calib_file
 
 '''from bts/c3d_loss.py, bts_pre_intr.py'''
