@@ -155,7 +155,7 @@ class DataReader:
 
         fname = self.ffinder.fname_from_ntp(ntp, ftype)
         if not os.path.exists(fname):
-            return None
+            return False
 
         if ftype == "rgb":
             data = self.read_rgb_img(fname)
@@ -285,7 +285,7 @@ class DataReaderKITTI(DataReader):
         """read an image whose pixel values are of specific meaning instead of RGB"""
         value_img = Image.open(fpath)
         value_img = np.asarray(value_img, dtype=np.float32)
-        value_img = value_img / 255.0
+        value_img = value_img / 256.0
 
         return value_img
 

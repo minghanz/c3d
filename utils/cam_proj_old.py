@@ -120,10 +120,10 @@ def seq_ops_on_cam_info(cam_info, cam_ops_list):
             raise ValueError("op not recognized!", type(cam_op))
     return cam_info
 
-class CamProj(nn.Module):
-    def __init__(self, dataset_reader, batch_size=None):
+class CamProjOld(nn.Module):
+    def __init__(self, data_root, batch_size=None):
         ## prepare uv1 and xy1 grid
-        super(CamProj, self).__init__()
+        super(CamProjOld, self).__init__()
         # self.width = {}
         # self.height = {}
         # self.K = {}
@@ -132,13 +132,7 @@ class CamProj(nn.Module):
 
         self.cam_infos = {}
         
-        self.dataset_reader = dataset_reader
-        intr_dict = dataset_reader.preload_dict['calib']
-        # for key in intr_dict:
-        #     intr_dict_key0 = key
-        #     break
-        # self.intr_dict_key_levels = list(x for x in intr_dict_key0._fields if getattr(intr_dict_key0,x) is not None)
-        # intr_dict = preload_K(data_root)
+        intr_dict = preload_K(data_root)
         for key in intr_dict:
             self.cam_infos[key] = CamInfo(in_extr=intr_dict[key], batch_size=batch_size)
 
@@ -163,10 +157,10 @@ class CamProj(nn.Module):
     #     side = date_side[1]
     #     return self.__getattr__("xy1_grid_{}_{}".format(date, side))
 
-    def prepare_cam_info(self, key, xy_crop=None):
+    def prepare_cam_info(self, date_side, xy_crop=None):
         '''
         '''
-        cam_info_cur = self.cam_infos[key]
+        cam_info_cur = self.cam_infos[date_side]
 
         if xy_crop is not None:
             cam_info_cropped = cam_info_cur.crop(xy_crop)
