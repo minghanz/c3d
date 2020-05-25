@@ -29,13 +29,40 @@ class DataFinder:
         self.preset_ftypes = list(self.ofile_level_names.keys())
 
         ### get the nested dict representing the hierarchy of levels
-        self.finfos = self.get_list_finfo()
+        self.finfos = self.get_finfo_dict()
 
         ### get the list of filepaths for ftypes in preload_ftypes (preload_ftypes should be a subset of preset_ftypes)
         self.fnames_preload = {}
         for ftype in self.preload_ftypes:
             self.fnames_preload[ftype] = {}
             self.get_fname_dict(self.fnames_preload[ftype], finfo_dict=self.finfos, level_list=[], desired_depth=len(self.ofile_level_names[ftype]), ftype=ftype)
+
+    def ntps_from_split_file(self, split_file):
+        """loading a split file and return a list of ntps"""
+        with open(split_file) as f:
+            lines = f.readlines()
+
+        ntps = [self.ntp_from_line_split_file(line) for line in lines]
+        return ntps
+
+    def finfos_idx_from_ntps(self, ntps):
+        """generate a nested dict from a list of ntps. Assume that ntps do not have blank levels"""
+        finfos = {}
+        n_levels = len(ntps)
+        for idx, ntp in enumerate(ntps):
+            self.nested_dict_from_ntp(finfos, ntp, idx)
+
+        return finfos
+    
+    def nested_dict_from_ntp(self, finfos_cur, ntp, idx):
+        for i, l in enumerate(ntp):
+            if i != len(ntp) - 1:
+                if l not in finfos_cur:
+                    finfos_cur[l] = {}
+                finfos_cur = finfos_cur[l]
+            else:
+                finfos_cur[l] = idx
+        return
 
     def ntp_from_fname(self, fname, ftype):
         assert ftype in self.ftypes
@@ -114,6 +141,21 @@ class DataFinder:
 
         return new_ntp
 
+    def ntp_ftype_convert(self, ntp, ftype):
+        """from a detailed ntp to a coarse ntp"""
+        assert ftype in self.preset_ftypes
+
+        ### convert the querying ntp to the ntp of the ftype wanted
+        levels_out = self.ofile_level_names[ftype]
+        levels_in = self.infile_level_name[ftype]
+        if not isinstance(levels_out, list):
+            levels_out = [levels_out]
+        if not isinstance(levels_in, list):
+            levels_in = [levels_in]
+        wanted_levels = levels_out + levels_in
+        new_ntp = self.ntp_strip_fill(ntp, wanted_levels)
+        return new_ntp
+
     def find_extra_dict_in_ntp(self, ntp_detailed, ntp_coarse):
         extra_dict = {}
         for key in self.level_names:
@@ -183,7 +225,7 @@ class DataFinderWaymo(DataFinder):
     
         return fname
 
-    def get_list_finfo(self):
+    def get_finfo_dict(self):
         finfos = {}
         seqs = [ d for d in os.listdir(self.data_root) if os.path.isdir(os.path.join(self.data_root,d) )]
         for seq in seqs:            # seq level
@@ -210,8 +252,8 @@ class DataFinderKITTI(DataFinder):
         self.ofile_level_names['T_rgb'] = ['date', 'seq', 'side']
         self.infile_level_name['T_rgb'] = 'fid'
 
-        # self.preload_ftypes = ['calib']
-        self.preload_ftypes = []
+        self.preload_ftypes = ['calib']
+        # self.preload_ftypes = []
 
         self.calib_filenames = ['calib_cam_to_cam', 'calib_velo_to_cam']
         super(DataFinderKITTI, self).__init__(name='kitti', *args, **kwargs)
@@ -282,7 +324,7 @@ class DataFinderKITTI(DataFinder):
     
         return fname
 
-    def get_list_finfo(self):
+    def get_finfo_dict(self):
         finfos = {}
         dates = [ d for d in os.listdir(self.data_root) if os.path.isdir(os.path.join(self.data_root,d) )]
         for date in dates:              # date level
@@ -298,7 +340,21 @@ class DataFinderKITTI(DataFinder):
                     fids = os.listdir(cur_root_3)
                     fids = [ int(fid.split('.')[0]) for fid in fids]
                     finfos[date][seq][side] = fids
-        return finfos
+        return finfos            
+
+    def ntp_from_line_split_file(self, line):
+        """from a line in split file to a ntp"""
+        """bts kitti split: /home/minghanz/bts/train_test_inputs/eigen_train_files_with_gt_jpg_fullpath.txt"""
+        img, gt, focal_length = line.split()
+        ntp = self.ntp_from_fname(img, 'rgb')
+        # path_strs = img.split('/')
+        # date_str = path_strs[0]
+        # seq_str = path_strs[1]
+        # seq_n = int(seq_str.split('_drive_')[1].split('_')[0])  # integer of the sequence number
+        # side = int(path_strs[2].split('_')[1])
+        # frame = int(path_strs[-1].split('.')[0])
+        # ntp = self.level_ntuple(date=date_str, seq=seq_str, side=side, fid=frame)
+        return ntp
 
 if __name__ == '__main__':
     ############## kitti
