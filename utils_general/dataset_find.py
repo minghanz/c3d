@@ -156,17 +156,26 @@ class DataFinder:
 
         tmp_dict = {}
         ### make sure the levels are in the same order of level_ntuple
-        wanted_levels = sorted(wanted_levels, key=lambda x: self.level_names.index(x))
-        for i, level in enumerate(wanted_levels):
+        # wanted_levels = sorted(wanted_levels, key=lambda x: self.level_names.index(x))
+        max_l = max([self.level_names.index(x) for x in wanted_levels])
+        for i, level in enumerate(self.level_names):
             tmp_dict[level] = getattr(level_ntp, level)
 
             ### fill in a valid value if it is originally None
             if tmp_dict[level] == None:
-                level_list_last = wanted_levels[:i]
+                # level_list_last = wanted_levels[:i]
+                level_list_last = [tmp_dict[self.level_names[l]] for l in range(i)]
                 finfo_dict_from_level = retrieve_at_level(self.finfos, *level_list_last)
                 tmp_dict[level] = list(finfo_dict_from_level.keys())[0]
 
-        new_ntp = level_ntuple(**tmp_dict)
+            if i == max_l:
+                break
+
+        wanted_dict = {}
+        for level in wanted_levels:
+            wanted_dict[level] = tmp_dict[level]
+
+        new_ntp = level_ntuple(**wanted_dict)
 
         return new_ntp
 

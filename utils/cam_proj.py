@@ -130,6 +130,8 @@ def batch_cam_infos(list_of_cam_info):
     K_batched = torch.cat([cam_info_i.K for cam_info_i in list_of_cam_info], dim=0)
     xy1_grid_batched = torch.cat([cam_info_i.xy1_grid for cam_info_i in list_of_cam_info], dim=0)
     uvb_grid_batched = torch.cat([cam_info_i.uvb_grid for cam_info_i in list_of_cam_info], dim=0)
+    for i in range(uvb_grid_batched.shape[0]):
+        uvb_grid_batched[i,2] = i
     P_cam_li_batched = torch.cat([cam_info_i.P_cam_li for cam_info_i in list_of_cam_info], dim=0)
     
     batched_cam_info = CamInfo(K_batched, width, height, xy1_grid_batched, uvb_grid_batched, P_cam_li_batched)

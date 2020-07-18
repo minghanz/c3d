@@ -17,6 +17,7 @@ from .utils.pc3d import *
 from .utils.cam_proj import *
 
 import argparse
+from .utils_general.argparse_f import init_argparser_f
 
 class PCL_C3D_Flat:
     def __init__(self):
@@ -237,7 +238,8 @@ class C3DLoss(nn.Module):
         self.normal_op_dense = NormalFromDepthDense()
 
     def parse_opts(self, inputs=None, f_input=None):
-        parser = argparse.ArgumentParser(description='Options for continuous 3D loss')
+        # parser = argparse.ArgumentParser(description='Options for continuous 3D loss')
+        parser = init_argparser_f(description='Options for continuous 3D loss')
 
         ## switch for enabling CVO loss
         parser.add_argument("--ell_basedist",          type=float, default=0,
@@ -284,6 +286,8 @@ class C3DLoss(nn.Module):
             ### take a file as input with dedicate c3d options, or 
             arg_filename_with_prefix = '@' + f_input
             self.opts, rest = parser.parse_known_args([arg_filename_with_prefix])
+            print("C3D options:")
+            print(self.opts)
 
         self.opts.ell_min = {}
         self.opts.ell_rand = {}
