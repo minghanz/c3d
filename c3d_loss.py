@@ -236,7 +236,7 @@ class C3DLoss(nn.Module):
 
         self.normal_op_dense = NormalFromDepthDense()
 
-    def parse_opts(self, inputs=None):
+    def parse_opts(self, inputs=None, f_input=None):
         parser = argparse.ArgumentParser(description='Options for continuous 3D loss')
 
         ## switch for enabling CVO loss
@@ -276,7 +276,14 @@ class C3DLoss(nn.Module):
         parser.add_argument("--cross_gt_pred_weight",        type=float, default=0,
                             help="weight of c3d loss between predictions and gt from another frame, relative to gt_pred_weight as 1. You may want to set to 1. ")
 
-        self.opts, rest = parser.parse_known_args(args=inputs) # inputs can be None, in which case _sys.argv[1:] are parsed
+        
+        if f_input is None:
+            ### take parsed args or sys.argv[1:] as input
+            self.opts, rest = parser.parse_known_args(args=inputs) # inputs can be None, in which case _sys.argv[1:] are parsed
+        else:
+            ### take a file as input with dedicate c3d options, or 
+            arg_filename_with_prefix = '@' + f_input
+            self.opts, rest = parser.parse_known_args([arg_filename_with_prefix])
 
         self.opts.ell_min = {}
         self.opts.ell_rand = {}
