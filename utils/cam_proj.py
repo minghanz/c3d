@@ -120,6 +120,21 @@ def seq_ops_on_cam_info(cam_info, cam_ops_list):
             raise ValueError("op not recognized!", type(cam_op))
     return cam_info
 
+def batch_cam_infos(list_of_cam_info):
+    ### we need the image shape in all cam_infos to be the same, other properties can be different
+    width = list_of_cam_info[0].width
+    height = list_of_cam_info[0].height
+    assert all(width == cam_info_i.width for cam_info_i in list_of_cam_info)
+    assert all(height == cam_info_i.height for cam_info_i in list_of_cam_info)
+
+    K_batched = torch.cat([cam_info_i.K for cam_info_i in list_of_cam_info], dim=0)
+    xy1_grid_batched = torch.cat([cam_info_i.xy1_grid for cam_info_i in list_of_cam_info], dim=0)
+    uvb_grid_batched = torch.cat([cam_info_i.uvb_grid for cam_info_i in list_of_cam_info], dim=0)
+    P_cam_li_batched = torch.cat([cam_info_i.P_cam_li for cam_info_i in list_of_cam_info], dim=0)
+    
+    batched_cam_info = CamInfo(K_batched, width, height, xy1_grid_batched, uvb_grid_batched, P_cam_li_batched)
+    return batched_cam_info
+
 class CamProj(nn.Module):
     def __init__(self, dataset_reader, batch_size=None):
         ## prepare uv1 and xy1 grid
