@@ -355,6 +355,7 @@ class DataReaderWaymo(DataReader):
         """read an image whose pixel values are of specific meaning instead of RGB"""
         value_img = Image.open(fpath)
         value_img = np.asarray(value_img, dtype=np.float32)
+        value_img = value_img / 256.0
 
         return value_img
 
@@ -387,12 +388,12 @@ class DataReaderWaymo(DataReader):
         inex = InExtr()
         align_corner = False
 
-        Tr_velo_to_cam = calib['Tr_velo_to_cam_{}'.format(side)].reshape((4,4))
+        Tr_velo_to_cam = calib['Tr_velo_to_cam_{}'.format(side)].reshape((4,4)).astype(np.float32)
 
-        cam_intr = calib['P{}'.format(side)].reshape((3,4))
+        cam_intr = calib['P{}'.format(side)].reshape((3,4)).astype(np.float32)
         cam_intr = cam_intr[:, :3]
-        dist_coeff = calib['Dist_{}'.format(side)]
-        waymo_cam_RT=np.array([0,-1,0,0,  0,0,-1,0,   1,0,0,0,    0 ,0 ,0 ,1]).reshape(4,4)     
+        dist_coeff = calib['Dist_{}'.format(side)].astype(np.float32)
+        waymo_cam_RT=np.array([0,-1,0,0,  0,0,-1,0,   1,0,0,0,    0 ,0 ,0 ,1], dtype=np.float32).reshape(4,4)     
         Tr_velo_to_cam = waymo_cam_RT.dot(Tr_velo_to_cam)       # the axis swapping is merged into T_velo_cam
 
         waymo_cam_RT_inv = np.linalg.inv(waymo_cam_RT[:3, :3])

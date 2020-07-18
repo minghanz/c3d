@@ -3,7 +3,7 @@ This module is to fast find corresponding files for the same frame.
 """
 
 import os
-import regex
+# import regex
 from collections import namedtuple
 
 # DatasetFInfo = namedtuple('DatasetFInfo', ['ftype', 'ext', 'level_ntp'])
@@ -50,6 +50,25 @@ class DataFinder:
         for ftype in self.preload_ftypes:
             self.fnames_preload[ftype] = {}
             self.get_fname_dict(self.fnames_preload[ftype], finfo_dict=self.finfos, level_list=[], desired_depth=len(self.ofile_level_names[ftype]), ftype=ftype)
+
+    def ntps_from_given_dict(self, finfo_dict, keys, dict_known, output_ntps):
+        levels = list(dict_known.keys())
+        # keys = sorted(keys, key=lambda x:self.level_names.index(x))
+        i = len(keys)
+        if i == len(self.level_names):
+            output_ntps.append(level_ntuple(*keys))
+        else:
+            if self.level_names[i] not in levels:
+                for key in finfo_dict:
+                    keys_new = [*keys, key]
+                    self.ntps_from_given_dict(finfo_dict[key], keys_new, dict_known, output_ntps)
+            else:
+                key = dict_known[self.level_names[i]]
+                keys_new = [*keys, key]
+                self.ntps_from_given_dict(finfo_dict[key], keys_new, dict_known, output_ntps)
+
+        return
+            
 
     def ntps_from_split_file(self, split_file):
         """loading a split file and return a list of ntps"""
@@ -99,13 +118,9 @@ class DataFinder:
     def get_fname_dict(self, fnames_dict_to_write, finfo_dict, level_list, desired_depth, ftype):
         """Get the list of all filepaths of a ftype"""
         if len(level_list) == desired_depth:
-            # ntp_list = level_list + [None]*(len(self.level_names) - desired_depth)
-            # ntp = level_ntuple(*ntp_list)
             ### with default values set for namedtuple, no need to manually fill in dummy fields
             ntp = level_ntuple(*level_list)
             fnames = self.fname_from_ntp(ntp, ftype)
-            ### using level_ntuple type as key so that the meaning is clear
-            # fnames_dict_to_write[(*level_list,)] = fnames
             fnames_dict_to_write[ntp] = fnames
         else:
             for new_level_item in finfo_dict:
