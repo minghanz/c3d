@@ -217,6 +217,10 @@ def save_np_to_img(np_img, filename):
         save_np_img_single(np_img, filename+'.png', mode)
 
 def save_np_img_single(np_img, filename, mode):
+    dirname = os.path.dirname(filename)
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
+
     assert mode in ['u16', 'u8']
     if mode == 'u16':
         # ### use opencv
