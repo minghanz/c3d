@@ -16,12 +16,16 @@ def compute_errors(gt, pred):
     # print("gt_depth max min", gt.max(), gt.min())
 
     thresh = np.maximum((gt / pred), (pred / gt))
-    d1 = (thresh < 1.25).mean()
-    d2 = (thresh < 1.25 ** 2).mean()
-    d3 = (thresh < 1.25 ** 3).mean()
+    d1 = (thresh < 1.25).mean() * 100
+    d2 = (thresh < 1.25 ** 2).mean() * 100
+    d3 = (thresh < 1.25 ** 3).mean() * 100
+    ### Minghan: return d1, d2, d3 as percentage
 
-    rmse = (gt - pred) ** 2
-    rmse = np.sqrt(rmse.mean())
+    sqr_e = (gt - pred) ** 2
+    mse = sqr_e.mean()
+    rmse = np.sqrt(sqr_e.mean())
+
+    mae = np.abs(gt - pred).mean()
 
     rmse_log = (np.log(gt) - np.log(pred)) ** 2
     rmse_log = np.sqrt(rmse_log.mean())
@@ -33,17 +37,20 @@ def compute_errors(gt, pred):
     silog = np.sqrt(np.mean(err ** 2) - np.mean(err) ** 2) * 100
 
     err = np.abs(np.log10(pred) - np.log10(gt))
-    log10 = np.mean(err)
+    lg10 = np.mean(err)
 
     ### this part not returned
     inv_output_km = (1e-3 * pred) ** (-1)
     inv_target_km = (1e-3 * gt) ** (-1)
-    abs_inv_diff = (inv_output_km - inv_target_km).abs()
-    irmse = torch.sqrt((torch.pow(abs_inv_diff, 2)).mean())
+    abs_inv_diff = np.abs(inv_output_km - inv_target_km)
+    irmse = np.sqrt((np.power(abs_inv_diff, 2)).mean())
     imae = abs_inv_diff.mean()
     #############################
 
-    return silog, log10, abs_rel, sq_rel, rmse, rmse_log, d1, d2, d3
+    errs = dict()
+    errs.update(irmse=irmse, imae=imae, mse=mse, mae=mae, rmse=rmse, rmse_log=rmse_log, abs_rel=abs_rel, sq_rel=sq_rel, lg10=lg10, silog=silog, d1=d1, d2=d2, d3=d3)
+
+    return errs
 
 # def compute_errors(gt, pred):
 #     """from monodepth2"""
@@ -67,7 +74,7 @@ def compute_errors(gt, pred):
 #     return abs_rel, sq_rel, rmse, rmse_log, a1, a2, a3
 
 def eval_preprocess(depth_pred, depth_gt, d_min, d_max, shape_unify=None, eval_crop=None):
-    """input shape is H*W or H*W*C"""
+    """input shape is H*W or H*W*C for np array, or H*W or C*H*W for torch tensor"""
     mode="torch" if isinstance(depth_pred, torch.Tensor) else "np"
 
     if depth_pred.ndim == 3:
@@ -153,6 +160,98 @@ def eval_depth_error(depth_pred, depth_gt, d_min, d_max, shape_unify=None, eval_
     """
     depth_pred_masked, depth_gt_masked = eval_preprocess(depth_pred, depth_gt, d_min, d_max, shape_unify, eval_crop)
     
-    ### calculate error
-    silog, log10, abs_rel, sq_rel, rmse, rmse_log, d1, d2, d3 = compute_errors(depth_gt_masked, depth_pred_masked)
+    if isinstance(depth_pred_masked, torch.Tensor):
+        depth_pred_masked = depth_pred_masked.cpu().numpy()
+    if isinstance(depth_gt_masked, torch.Tensor):
+        depth_gt_masked = depth_gt_masked.cpu().numpy()
     
+    ### calculate error
+    return compute_errors(depth_gt_masked, depth_pred_masked)
+   
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+
+    def mean(self):
+        return self.sum / self.count
+
+    def values(self):
+        return self.val 
+
+class Metrics(object):
+
+    def __init__(self, d_min, d_max, shape_unify, eval_crop):
+
+        self.d_min = d_min
+        self.d_max = d_max
+        self.shape_unify = shape_unify
+        self.eval_crop = eval_crop
+
+        self.eval_items = ['irmse', 'imae', 'mse', 'mae', 'rmse', 'rmse_log', 'abs_rel', 'sq_rel', 'lg10', 'silog', 'd1', 'd2', 'd3']
+
+        self.evals = dict()
+        for item in self.eval_items:
+            self.evals[item] = AverageMeter()
+
+    def reset(self):
+        for item in self.eval_items:
+            self.evals[item].reset()
+
+    def compute_metric(self, pred, gt):
+        """the inputs are not batched.
+        """
+        errs = eval_depth_error(pred, gt, self.d_min, self.d_max, self.shape_unify, self.eval_crop)
+
+        for item in self.eval_items:
+            self.evals[item].update(errs[item])
+
+    def add_scalar(self, writer=None, tag="Test", epoch=0):
+        if writer is None:
+            return
+
+        for item in self.eval_items:
+            writer.add_scalar(tag+"/{}".format(item), self.evals[item].mean(), epoch)
+
+    def get_header_row(self):
+        header = ("%10s"*len(self.eval_items))% tuple(self.eval_items)
+        return header
+
+    def get_snapshot_row(self):
+        row = ("%10.3f"*len(self.eval_items))% tuple(self.evals[x].values() for x in self.eval_items)
+        return row
+
+    def get_result_row(self):
+        row = ("%10.3f"*len(self.eval_items))% tuple(self.evals[x].mean() for x in self.eval_items)
+        return row
+
+    def get_snapshot_info(self):
+        # info = "abs_rel: %.2f" % self.abs_rel.values() + "(%.2f)" % self.abs_rel.mean()
+        # info += " rmse: %.2f" % self.rmse.values() + "(%.2f)" % self.rmse.mean()
+        # return info
+
+        info = ""
+        for item in self.eval_items:
+            info = info + "{}: {:.3f}".format(item, self.evals[item].values())
+        return info
+
+    def get_result_info(self):
+        # info = "abs_rel: %.2f" % self.abs_rel.mean() + \
+        #        " rmse: %.2f" % self.rmse.mean() + \
+        #        " silog: %.2f" % self.silog.mean()
+
+        info = ""
+        for item in self.eval_items:
+            info = info + "{}: {:.3f}".format(item, self.evals[item].mean())
+        return info
