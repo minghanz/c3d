@@ -65,6 +65,11 @@ def vis_normal(normal):
     vis = normal * 0.5 + 0.5
     return vis
 
+def visdepth2realdepth_np(vis_depth, ref_depth=10):
+    dum_zero = np.zeros_like(vis_depth)
+    depth = np.where(vis_depth>0, ref_depth/vis_depth - ref_depth, dum_zero)
+    return depth
+
 '''from bts/bts_utils.py'''
 def vis_depth(depth, ref_depth=10):        ## why normalize_result in bts_main.py want to convert it to numpy?
     dum_zero = torch.zeros_like(depth)
