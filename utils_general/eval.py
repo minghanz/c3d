@@ -74,7 +74,13 @@ def compute_errors(gt, pred):
 #     return abs_rel, sq_rel, rmse, rmse_log, a1, a2, a3
 
 def eval_preprocess(depth_pred, depth_gt, d_min, d_max, shape_unify=None, eval_crop=None):
-    """input shape is H*W or H*W*C for np array, or H*W or C*H*W for torch tensor"""
+    """return pred and gt which consist of only valid and corresponding points, ready to calculate error metrics.
+    input shape is H*W or H*W*C for np array, or H*W or C*H*W for torch tensor
+    shape_unify: one of ["kb_crop", "resize", None]
+    eval_crop: one of ["garg_crop", "eigen_crop", None]
+    depth_gt must be uncropped full image, otherwise eval_crop will produce unintended behavior
+    the inputs are not batched.
+    """
     mode="torch" if isinstance(depth_pred, torch.Tensor) else "np"
 
     if depth_pred.ndim == 3:
@@ -98,14 +104,14 @@ def eval_preprocess(depth_pred, depth_gt, d_min, d_max, shape_unify=None, eval_c
     assert depth_gt.ndim == 2
 
     ### unify the shape of depth_pred and depth_gt
+    gt_height = depth_gt.shape[0]
+    gt_width = depth_gt.shape[1]
     if shape_unify is None:
         assert depth_pred.shape == depth_gt.shape, "pred: {} gt: {}".format(depth_pred.shape, depth_gt.shape)
         mask_shape_unify = np.ones_like(depth_gt, dtype=np.bool) if mode == "np" else torch.ones_like(depth_gt, dtype=torch.bool)
 
     elif shape_unify == "kb_crop":
         assert depth_pred.shape == (352, 1216), depth_pred.shape
-        gt_height = depth_gt.shape[0]
-        gt_width = depth_gt.shape[1]
         top_margin = int(gt_height-352)
         left_margin = int((gt_width - 1216) / 2)
         depth_pred_uncropped = np.zeros_like(depth_gt) if mode == "np" else torch.zeros_like(depth_gt)
