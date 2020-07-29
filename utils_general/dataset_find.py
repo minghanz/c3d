@@ -3,10 +3,17 @@ This module is to fast find corresponding files for the same frame.
 """
 
 import os
-import regex
+# import regex
 from collections import namedtuple
 
 # DatasetFInfo = namedtuple('DatasetFInfo', ['ftype', 'ext', 'level_ntp'])
+
+# level_ntuple = {}
+
+def set_ntp(name, level_names):
+    global level_ntuple
+    level_ntuple = namedtuple('level_ntuple', level_names)
+    level_ntuple.__new__.__defaults__ = (None,) * len(level_ntuple._fields)
 
 def retrieve_at_level(data, *args):
     '''This function is to read from a nested dict with given list of keys of arbitrary depth. The keys should be on consecutive levels from the top. 
@@ -22,14 +29,21 @@ class DataFinder:
     def __init__(self, name, data_root):
         self.data_root = data_root
         self.name = name
-        self.level_ntuple = namedtuple('level_'+name, self.level_names)
-        self.level_ntuple.__new__.__defaults__ = (None,) * len(self.level_ntuple._fields)   # https://stackoverflow.com/a/18348004 
+        # self.level_ntuple = namedtuple('level_'+name, self.level_names)
+        # self.level_ntuple.__qualname__ = 'DataFinder.level_'+name
+        # self.level_ntuple = namedtuple('level_ntuple', self.level_names)
+        set_ntp('level_'+name, self.level_names)
+        # level_ntuple[self.name] = namedtuple('level_'+name, self.level_names)
+        # level_ntuple[self.name].__new__.__defaults__ = (None,) * len(level_ntuple[self.name]._fields)   # https://stackoverflow.com/a/18348004 
+        
+        # ### attribute lookup failed
+        # setattr(self, 'level_'+name, self.level_ntuple)
 
         ### the ftypes that contains more than one item in a singe file
         self.preset_ftypes = list(self.ofile_level_names.keys())
 
         ### get the nested dict representing the hierarchy of levels
-        self.finfos = self.get_list_finfo()
+        self.finfos = self.get_finfo_dict()
 
         ### get the list of filepaths for ftypes in preload_ftypes (preload_ftypes should be a subset of preset_ftypes)
         self.fnames_preload = {}
@@ -37,12 +51,58 @@ class DataFinder:
             self.fnames_preload[ftype] = {}
             self.get_fname_dict(self.fnames_preload[ftype], finfo_dict=self.finfos, level_list=[], desired_depth=len(self.ofile_level_names[ftype]), ftype=ftype)
 
+    def ntps_from_given_dict(self, finfo_dict, keys, dict_known, output_ntps):
+        levels = list(dict_known.keys())
+        # keys = sorted(keys, key=lambda x:self.level_names.index(x))
+        i = len(keys)
+        if i == len(self.level_names):
+            output_ntps.append(level_ntuple(*keys))
+        else:
+            if self.level_names[i] not in levels:
+                for key in finfo_dict:
+                    keys_new = [*keys, key]
+                    self.ntps_from_given_dict(finfo_dict[key], keys_new, dict_known, output_ntps)
+            else:
+                key = dict_known[self.level_names[i]]
+                keys_new = [*keys, key]
+                self.ntps_from_given_dict(finfo_dict[key], keys_new, dict_known, output_ntps)
+
+        return
+            
+
+    def ntps_from_split_file(self, split_file):
+        """loading a split file and return a list of ntps"""
+        with open(split_file) as f:
+            lines = f.readlines()
+
+        ntps = [self.ntp_from_line_split_file(line) for line in lines]
+        return ntps
+
+    def finfos_idx_from_ntps(self, ntps):
+        """generate a nested dict from a list of ntps. Assume that ntps do not have blank levels"""
+        finfos = {}
+        n_levels = len(ntps)
+        for idx, ntp in enumerate(ntps):
+            self.nested_dict_from_ntp(finfos, ntp, idx)
+
+        return finfos
+    
+    def nested_dict_from_ntp(self, finfos_cur, ntp, idx):
+        for i, l in enumerate(ntp):
+            if i != len(ntp) - 1:
+                if l not in finfos_cur:
+                    finfos_cur[l] = {}
+                finfos_cur = finfos_cur[l]
+            else:
+                finfos_cur[l] = idx
+        return
+
     def ntp_from_fname(self, fname, ftype):
         assert ftype in self.ftypes
         if self.data_root in fname:
             fname = os.path.relpath(fname, self.data_root)
         ftype, ext, level_items = self.ntp_from_fname_parse(fname, ftype)
-        level_ntp = self.level_ntuple(*level_items)     # create a namedtuple from an unpacked list
+        level_ntp = level_ntuple(*level_items)     # create a namedtuple from an unpacked list
         # finfo = DatasetFInfo(ftype=ftype, ext=ext, level_ntp=level_ntp)
         return level_ntp
 
@@ -58,13 +118,9 @@ class DataFinder:
     def get_fname_dict(self, fnames_dict_to_write, finfo_dict, level_list, desired_depth, ftype):
         """Get the list of all filepaths of a ftype"""
         if len(level_list) == desired_depth:
-            # ntp_list = level_list + [None]*(len(self.level_names) - desired_depth)
-            # ntp = self.level_ntuple(*ntp_list)
             ### with default values set for namedtuple, no need to manually fill in dummy fields
-            ntp = self.level_ntuple(*level_list)
+            ntp = level_ntuple(*level_list)
             fnames = self.fname_from_ntp(ntp, ftype)
-            ### using self.level_ntuple type as key so that the meaning is clear
-            # fnames_dict_to_write[(*level_list,)] = fnames
             fnames_dict_to_write[ntp] = fnames
         else:
             for new_level_item in finfo_dict:
@@ -95,23 +151,47 @@ class DataFinder:
         return finfo_dict_from_level        
 
     def ntp_strip_fill(self, level_ntp, wanted_levels):
-        """return a new self.level_ntuple with fields given by wanted_levels, and values from original level_ntp. 
+        """return a new level_ntuple with fields given by wanted_levels, and values from original level_ntp. 
         If wanted field is None in original level_ntp, it fills an arbitrary valid value from self.finfos. """
 
         tmp_dict = {}
-        ### make sure the levels are in the same order of self.level_ntuple
-        wanted_levels = sorted(wanted_levels, key=lambda x: self.level_names.index(x))
-        for i, level in enumerate(wanted_levels):
+        ### make sure the levels are in the same order of level_ntuple
+        # wanted_levels = sorted(wanted_levels, key=lambda x: self.level_names.index(x))
+        max_l = max([self.level_names.index(x) for x in wanted_levels])
+        for i, level in enumerate(self.level_names):
             tmp_dict[level] = getattr(level_ntp, level)
 
             ### fill in a valid value if it is originally None
             if tmp_dict[level] == None:
-                level_list_last = wanted_levels[:i]
+                # level_list_last = wanted_levels[:i]
+                level_list_last = [tmp_dict[self.level_names[l]] for l in range(i)]
                 finfo_dict_from_level = retrieve_at_level(self.finfos, *level_list_last)
                 tmp_dict[level] = list(finfo_dict_from_level.keys())[0]
 
-        new_ntp = self.level_ntuple(**tmp_dict)
+            if i == max_l:
+                break
 
+        wanted_dict = {}
+        for level in wanted_levels:
+            wanted_dict[level] = tmp_dict[level]
+
+        new_ntp = level_ntuple(**wanted_dict)
+
+        return new_ntp
+
+    def ntp_ftype_convert(self, ntp, ftype):
+        """from a detailed ntp to a coarse ntp"""
+        assert ftype in self.preset_ftypes
+
+        ### convert the querying ntp to the ntp of the ftype wanted
+        levels_out = self.ofile_level_names[ftype]
+        levels_in = self.infile_level_name[ftype]
+        if not isinstance(levels_out, list):
+            levels_out = [levels_out]
+        if not isinstance(levels_in, list):
+            levels_in = [levels_in]
+        wanted_levels = levels_out + levels_in
+        new_ntp = self.ntp_strip_fill(ntp, wanted_levels)
         return new_ntp
 
     def find_extra_dict_in_ntp(self, ntp_detailed, ntp_coarse):
@@ -183,7 +263,7 @@ class DataFinderWaymo(DataFinder):
     
         return fname
 
-    def get_list_finfo(self):
+    def get_finfo_dict(self):
         finfos = {}
         seqs = [ d for d in os.listdir(self.data_root) if os.path.isdir(os.path.join(self.data_root,d) )]
         for seq in seqs:            # seq level
@@ -210,8 +290,8 @@ class DataFinderKITTI(DataFinder):
         self.ofile_level_names['T_rgb'] = ['date', 'seq', 'side']
         self.infile_level_name['T_rgb'] = 'fid'
 
-        # self.preload_ftypes = ['calib']
-        self.preload_ftypes = []
+        self.preload_ftypes = ['calib']
+        # self.preload_ftypes = []
 
         self.calib_filenames = ['calib_cam_to_cam', 'calib_velo_to_cam']
         super(DataFinderKITTI, self).__init__(name='kitti', *args, **kwargs)
@@ -282,7 +362,7 @@ class DataFinderKITTI(DataFinder):
     
         return fname
 
-    def get_list_finfo(self):
+    def get_finfo_dict(self):
         finfos = {}
         dates = [ d for d in os.listdir(self.data_root) if os.path.isdir(os.path.join(self.data_root,d) )]
         for date in dates:              # date level
@@ -298,7 +378,21 @@ class DataFinderKITTI(DataFinder):
                     fids = os.listdir(cur_root_3)
                     fids = [ int(fid.split('.')[0]) for fid in fids]
                     finfos[date][seq][side] = fids
-        return finfos
+        return finfos            
+
+    def ntp_from_line_split_file(self, line):
+        """from a line in split file to a ntp"""
+        """bts kitti split: /home/minghanz/bts/train_test_inputs/eigen_train_files_with_gt_jpg_fullpath.txt"""
+        img, gt, focal_length = line.split()
+        ntp = self.ntp_from_fname(img, 'rgb')
+        # path_strs = img.split('/')
+        # date_str = path_strs[0]
+        # seq_str = path_strs[1]
+        # seq_n = int(seq_str.split('_drive_')[1].split('_')[0])  # integer of the sequence number
+        # side = int(path_strs[2].split('_')[1])
+        # frame = int(path_strs[-1].split('.')[0])
+        # ntp = level_ntuple(date=date_str, seq=seq_str, side=side, fid=frame)
+        return ntp
 
 if __name__ == '__main__':
     ############## kitti

@@ -120,27 +120,10 @@ def seq_ops_on_cam_info(cam_info, cam_ops_list):
             raise ValueError("op not recognized!", type(cam_op))
     return cam_info
 
-def batch_cam_infos(list_of_cam_info):
-    ### we need the image shape in all cam_infos to be the same, other properties can be different
-    width = list_of_cam_info[0].width
-    height = list_of_cam_info[0].height
-    assert all(width == cam_info_i.width for cam_info_i in list_of_cam_info)
-    assert all(height == cam_info_i.height for cam_info_i in list_of_cam_info)
-
-    K_batched = torch.cat([cam_info_i.K for cam_info_i in list_of_cam_info], dim=0)
-    xy1_grid_batched = torch.cat([cam_info_i.xy1_grid for cam_info_i in list_of_cam_info], dim=0)
-    uvb_grid_batched = torch.cat([cam_info_i.uvb_grid for cam_info_i in list_of_cam_info], dim=0)
-    for i in range(uvb_grid_batched.shape[0]):
-        uvb_grid_batched[i,2] = i
-    P_cam_li_batched = torch.cat([cam_info_i.P_cam_li for cam_info_i in list_of_cam_info], dim=0)
-    
-    batched_cam_info = CamInfo(K_batched, width, height, xy1_grid_batched, uvb_grid_batched, P_cam_li_batched)
-    return batched_cam_info
-
-class CamProj(nn.Module):
-    def __init__(self, dataset_reader, batch_size=None):
+class CamProjOld(nn.Module):
+    def __init__(self, data_root, batch_size=None):
         ## prepare uv1 and xy1 grid
-        super(CamProj, self).__init__()
+        super(CamProjOld, self).__init__()
         # self.width = {}
         # self.height = {}
         # self.K = {}
@@ -149,13 +132,7 @@ class CamProj(nn.Module):
 
         self.cam_infos = {}
         
-        self.dataset_reader = dataset_reader
-        intr_dict = dataset_reader.preload_dict['calib']
-        # for key in intr_dict:
-        #     intr_dict_key0 = key
-        #     break
-        # self.intr_dict_key_levels = list(x for x in intr_dict_key0._fields if getattr(intr_dict_key0,x) is not None)
-        # intr_dict = preload_K(data_root)
+        intr_dict = preload_K(data_root)
         for key in intr_dict:
             self.cam_infos[key] = CamInfo(in_extr=intr_dict[key], batch_size=batch_size)
 
@@ -180,10 +157,10 @@ class CamProj(nn.Module):
     #     side = date_side[1]
     #     return self.__getattr__("xy1_grid_{}_{}".format(date, side))
 
-    def prepare_cam_info(self, key, xy_crop=None):
+    def prepare_cam_info(self, date_side, xy_crop=None):
         '''
         '''
-        cam_info_cur = self.cam_infos[key]
+        cam_info_cur = self.cam_infos[date_side]
 
         if xy_crop is not None:
             cam_info_cropped = cam_info_cur.crop(xy_crop)

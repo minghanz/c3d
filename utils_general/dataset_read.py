@@ -70,14 +70,7 @@ class DataReader:
         assert ftype in self.ffinder.preload_ftypes
 
         ### convert the querying ntp to the ntp of the ftype wanted
-        levels_out = self.ffinder.ofile_level_names[ftype]
-        levels_in = self.ffinder.infile_level_name[ftype]
-        if not isinstance(levels_out, list):
-            levels_out = [levels_out]
-        if not isinstance(levels_in, list):
-            levels_in = [levels_in]
-        wanted_levels = levels_out + levels_in
-        new_ntp = self.ffinder.ntp_strip_fill(ntp, wanted_levels)
+        new_ntp = self.ffinder.ntp_ftype_convert(ntp, ftype)
 
         ### retrieve the data from preloaded dict
         data = self.preload_dict[ftype][new_ntp]
@@ -161,6 +154,9 @@ class DataReader:
         assert ftype not in self.ffinder.preset_ftypes
 
         fname = self.ffinder.fname_from_ntp(ntp, ftype)
+        if not os.path.exists(fname):
+            return False
+
         if ftype == "rgb":
             data = self.read_rgb_img(fname)
         elif ftype == "depth_raw":
@@ -218,7 +214,7 @@ class DataReader:
     def read_datadict_from_img_path(self, img_path, ftype_list=None):
         """given an image path, retrieve all related info (lidar, depth, pose, etc. )"""
         if ftype_list is None:
-            ftype_list = ["rgb", "depth_dense", "T_rgb"]
+            ftype_list = self.ffinder.ftypes
 
         ntp = self.ffinder.ntp_from_fname(img_path, "rgb")
         data_dict = {}
@@ -226,6 +222,19 @@ class DataReader:
             data_dict[ftype] = self.read_from_ntp(ntp, ftype)
 
         return data_dict
+
+    def read_datadict_from_ntp(self, ntp, ftype_list=None):
+        if ftype_list is None:
+            ftype_list = self.ffinder.ftypes
+
+        data_dict = {}
+        for ftype in ftype_list:
+            data_dict[ftype] = self.read_from_ntp(ntp, ftype)
+
+        return data_dict
+
+    def ntps_from_split_file(self, split_file):
+        return self.ffinder.ntps_from_split_file(split_file)
  
     # def read_T(self, fname, *kwargs):
     #     Ts = self.load_Ts(fname)
@@ -276,7 +285,7 @@ class DataReaderKITTI(DataReader):
         """read an image whose pixel values are of specific meaning instead of RGB"""
         value_img = Image.open(fpath)
         value_img = np.asarray(value_img, dtype=np.float32)
-        value_img = value_img / 255.0
+        value_img = value_img / 256.0
 
         return value_img
 
@@ -346,6 +355,7 @@ class DataReaderWaymo(DataReader):
         """read an image whose pixel values are of specific meaning instead of RGB"""
         value_img = Image.open(fpath)
         value_img = np.asarray(value_img, dtype=np.float32)
+        value_img = value_img / 256.0
 
         return value_img
 
@@ -378,12 +388,12 @@ class DataReaderWaymo(DataReader):
         inex = InExtr()
         align_corner = False
 
-        Tr_velo_to_cam = calib['Tr_velo_to_cam_{}'.format(side)].reshape((4,4))
+        Tr_velo_to_cam = calib['Tr_velo_to_cam_{}'.format(side)].reshape((4,4)).astype(np.float32)
 
-        cam_intr = calib['P{}'.format(side)].reshape((3,4))
+        cam_intr = calib['P{}'.format(side)].reshape((3,4)).astype(np.float32)
         cam_intr = cam_intr[:, :3]
-        dist_coeff = calib['Dist_{}'.format(side)]
-        waymo_cam_RT=np.array([0,-1,0,0,  0,0,-1,0,   1,0,0,0,    0 ,0 ,0 ,1]).reshape(4,4)     
+        dist_coeff = calib['Dist_{}'.format(side)].astype(np.float32)
+        waymo_cam_RT=np.array([0,-1,0,0,  0,0,-1,0,   1,0,0,0,    0 ,0 ,0 ,1], dtype=np.float32).reshape(4,4)     
         Tr_velo_to_cam = waymo_cam_RT.dot(Tr_velo_to_cam)       # the axis swapping is merged into T_velo_cam
 
         waymo_cam_RT_inv = np.linalg.inv(waymo_cam_RT[:3, :3])
@@ -407,12 +417,16 @@ if __name__ == "__main__":
 
     dataread = DataReaderKITTI(data_root=data_root_kitti)
     img_path = '/mnt/storage8t/minghanz/Datasets/KITTI_data/kitti_data/2011_09_26/2011_09_26_drive_0001_sync/image_02/data/0000000005.jpg'
+    split_path = '/home/minghanz/bts/train_test_inputs/eigen_train_files_with_gt_nonstatic_jpg_fullpath.txt'
     ftype_list = ["rgb", "depth_dense", "T_rgb", "lidar", "calib"]
     
     # dataread = DataReaderWaymo(data_root=data_root_waymo)
     # img_path = '/mnt/storage8t/datasets/waymo_kitti/training/1083056852838271990_4080_000_4100_000/image_00/0000000000.jpg'
     # ftype_list = ['rgb', 'depth_raw', 'lidar', 'calib', 'T_rgb']
 
-    data_dict = dataread.read_datadict_from_img_path(img_path, ftype_list)
-    print(data_dict)
+    # data_dict = dataread.read_datadict_from_img_path(img_path, ftype_list)
+    # print(data_dict)
 
+    ntps = dataread.ntps_from_split_file(split_path)
+    data_dict = dataread.read_datadict_from_ntp(ntps[0], ftype_list)
+    print(data_dict)
