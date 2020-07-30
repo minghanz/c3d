@@ -73,7 +73,7 @@ def compute_errors(gt, pred):
 
 #     return abs_rel, sq_rel, rmse, rmse_log, a1, a2, a3
 
-def eval_preprocess(depth_pred, depth_gt, d_min, d_max, shape_unify=None, eval_crop=None):
+def eval_preprocess(depth_pred, depth_gt, d_min, d_max, shape_unify=None, eval_crop=None, adjust_mean=False, batch_adjust_mean=None):
     """return pred and gt which consist of only valid and corresponding points, ready to calculate error metrics.
     input shape is H*W or H*W*C for np array, or H*W or C*H*W for torch tensor
     shape_unify: one of ["kb_crop", "resize", None]
@@ -143,36 +143,53 @@ def eval_preprocess(depth_pred, depth_gt, d_min, d_max, shape_unify=None, eval_c
     elif eval_crop == "eigen_crop":
         mask_crop = np.zeros_like(depth_gt, dtype=np.bool) if mode == "np" else torch.zeros_like(depth_gt, dtype=torch.bool)
         mask_crop[int(0.3324324 * gt_height):int(0.91351351 * gt_height), int(0.0359477 * gt_width):int(0.96405229 * gt_width)] = 1
+    elif eval_crop == "vkitti2":
+        mask_crop = np.zeros_like(depth_gt, dtype=np.bool) if mode == "np" else torch.zeros_like(depth_gt, dtype=torch.bool)
+        mask_crop[int(0.5 * gt_height):] = 1
     else:
         raise ValueError("eval_crop {} not recognized", eval_crop)
 
     mask = mask_shape_unify & mask_valid & mask_value & mask_crop
 
-    ### clip prediction
-    depth_pred[depth_pred<d_min] = d_min
-    depth_pred[depth_pred>d_max] = d_max
-
     depth_pred_masked = depth_pred[mask]
     depth_gt_masked = depth_gt[mask]
 
-    return depth_pred_masked, depth_gt_masked
+    mean_pred = depth_pred_masked.mean()
+    mean_gt = depth_gt_masked.mean()
+    if adjust_mean:
+        assert batch_adjust_mean is None
+        depth_pred_masked *= mean_gt/mean_pred
+    elif batch_adjust_mean is not None:
+        assert adjust_mean == False
+        depth_pred_masked = depth_pred_masked / batch_adjust_mean
 
-def eval_depth_error(depth_pred, depth_gt, d_min, d_max, shape_unify=None, eval_crop=None):
+    ### clip prediction
+    depth_pred_masked[depth_pred_masked<d_min] = d_min
+    depth_pred_masked[depth_pred_masked>d_max] = d_max
+
+    extra_dict = {}
+    extra_dict["mask"] = mask
+    extra_dict['mean_pred'] = mean_pred
+    extra_dict['mean_gt'] = mean_gt
+
+    return depth_pred_masked, depth_gt_masked, extra_dict
+
+def eval_depth_error(depth_pred, depth_gt, d_min, d_max, shape_unify=None, eval_crop=None, adjust_mean=False, batch_adjust_mean=None):
     """
     shape_unify: one of ["kb_crop", "resize", None]
     eval_crop: one of ["garg_crop", "eigen_crop", None]
     depth_gt must be uncropped full image, otherwise eval_crop will produce unintended behavior
     the inputs are not batched.
     """
-    depth_pred_masked, depth_gt_masked = eval_preprocess(depth_pred, depth_gt, d_min, d_max, shape_unify, eval_crop)
-    
+    depth_pred_masked, depth_gt_masked, extra_dict = eval_preprocess(depth_pred, depth_gt, d_min, d_max, shape_unify, eval_crop, adjust_mean, batch_adjust_mean)
+
     if isinstance(depth_pred_masked, torch.Tensor):
         depth_pred_masked = depth_pred_masked.cpu().numpy()
     if isinstance(depth_gt_masked, torch.Tensor):
         depth_gt_masked = depth_gt_masked.cpu().numpy()
     
     ### calculate error
-    return compute_errors(depth_gt_masked, depth_pred_masked)
+    return compute_errors(depth_gt_masked, depth_pred_masked), extra_dict
    
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -198,12 +215,14 @@ class AverageMeter(object):
 
 class Metrics(object):
 
-    def __init__(self, d_min, d_max, shape_unify, eval_crop):
+    def __init__(self, d_min, d_max, shape_unify, eval_crop, adjust_mean=False, batch_adjust_mean=None):
 
         self.d_min = d_min
         self.d_max = d_max
         self.shape_unify = shape_unify
         self.eval_crop = eval_crop
+        self.adjust_mean = adjust_mean
+        self.batch_adjust_mean = batch_adjust_mean
 
         self.eval_items = ['irmse', 'imae', 'mse', 'mae', 'rmse', 'rmse_log', 'abs_rel', 'sq_rel', 'lg10', 'silog', 'd1', 'd2', 'd3']
 
@@ -218,10 +237,12 @@ class Metrics(object):
     def compute_metric(self, pred, gt):
         """the inputs are not batched.
         """
-        errs = eval_depth_error(pred, gt, self.d_min, self.d_max, self.shape_unify, self.eval_crop)
+        errs, extra_dict = eval_depth_error(pred, gt, self.d_min, self.d_max, self.shape_unify, self.eval_crop, self.adjust_mean, self.batch_adjust_mean)
 
         for item in self.eval_items:
             self.evals[item].update(errs[item])
+        
+        return extra_dict
 
     def add_scalar(self, writer=None, tag="Test", epoch=0):
         if writer is None:

@@ -20,7 +20,7 @@ def retrieve_at_level(data, *args):
     https://stackoverflow.com/a/48005385'''
     if args and data:
         element  = args[0]
-        if element:
+        if element is not None:
             # value = data.get(element)
             value = data[element]
             return value if len(args) == 1 else retrieve_at_level(value, *args[1:])
@@ -107,7 +107,7 @@ class DataFinder:
         return level_ntp
 
     def fname_from_ntp(self, level_ntp, new_ftype):
-        assert new_ftype in self.ftypes
+        assert new_ftype in self.ftypes, "{} {}".format(new_ftype, self.ftypes)
         fname = self.fname_from_ntp_parsed(new_ftype, *level_ntp)     # unpack the namedtuple before feeding into the function
         if isinstance(fname, list):
             fname = [ os.path.join(self.data_root, f) for f in fname ]
@@ -126,15 +126,33 @@ class DataFinder:
             for new_level_item in finfo_dict:
                 self.get_fname_dict(fnames_dict_to_write, finfo_dict[new_level_item], level_list + [new_level_item], desired_depth, ftype)
 
+    def list_list_from_given_levels(self, level_list, query_levels, output_list, output_list_list):
+        """return a list of list, each small list is the values at query_levels, when combined with level_list, corresponding to a ntp up to the deepest level in query_levels. 
+        level_list and query_levels should be on continuous levels. """
+        query_level_idx = self.level_names.index(query_levels[0])
+        if len(level_list) == query_level_idx + 1:
+            output_list = [*output_list, level_list[-1]]
+            if len(query_levels) == 1:
+                output_list_list.append(output_list)
+                return
+            else:
+                query_levels = query_levels[1:]
+
+        finfo_dict_from_level = retrieve_at_level(self.finfos, *level_list)
+        for key in finfo_dict_from_level:
+            level_list_new = [*level_list, key]
+            self.list_list_from_given_levels(level_list_new, query_levels, output_list, output_list_list)
+        
 
     def get_finfo_list_at_level(self, finfo_dict, level_ntp, query_level=None):
         """read from the nested dict finfo_dict. The keys are given by level_ntp and query_level. 
         The level_ntp should be on consecutive levels, and query_level should be on a lower level. 
-        query_level can be more than one level lower than level_ntp's lowest level, in which case the intermediate levels will be filled by arbitrary value. """
+        query_level can be more than one level lower than level_ntp's lowest level, in which case the intermediate levels will be filled by arbitrary value. 
+        query_level can be a list of more than one continuous levels"""
         level_list = [l for l in level_ntp if l is not None]
 
         if query_level is not None:
-            query_level_idx = self.level_names.index(query_level)
+            query_level_idx = self.level_names.index(query_level[0])
             assert query_level_idx >= len(level_list), "query_level conflicts with level_ntp."
 
             ### fill in dummy keys between level_ntp and query_level
@@ -142,12 +160,19 @@ class DataFinder:
                 finfo_dict_from_level = retrieve_at_level(self.finfos, *level_list)
                 level_list.append(list(finfo_dict_from_level.keys())[0])
             
+            output_list=[]
+            output_list_list=[]
+            self.list_list_from_given_levels(level_list, query_level, output_list, output_list_list)
+            return output_list_list
+            
+
         finfo_dict_from_level = retrieve_at_level(self.finfos, *level_list)
         if isinstance(finfo_dict_from_level, dict):
             finfo_dict_from_level = list(finfo_dict_from_level.keys())
         else:
             assert isinstance(finfo_dict_from_level, list), "(sub)element in self.finfos is either dict or list, now it is {}".format(type(finfo_dict_from_level))
         
+        finfo_dict_from_level = [[x] for x in finfo_dict_from_level]
         return finfo_dict_from_level        
 
     def ntp_strip_fill(self, level_ntp, wanted_levels):
@@ -202,12 +227,75 @@ class DataFinder:
 
         return extra_dict
 
+class DataFinderVKITTI2(DataFinder):
+    def __init__(self, *args, **kwargs):
+        self.ftypes = ['rgb', 'depth_raw', 'calib']
+        self.level_names = ['scene', 'env', 'cam', 'fid']
+        self.ofile_level_names = {'calib': ['scene', 'env']}
+        self.infile_level_name = {'calib': ['cam', 'fid']}
+
+        # self.preload_ftypes = ['calib']
+        self.preload_ftypes = []
+
+        self.calib_filenames = ['intrinsic']
+        super(DataFinderVKITTI2, self).__init__(name='vkitti2', *args, **kwargs)
+    
+    def ntp_from_fname_parse(self, fname, ftype):
+        '''fname is relative to the root of the dataset'''
+        if ftype in ['rgb', 'depth_raw']:
+            '''Scene02/clone/frames/depth/Camera_0/depth_00000.png'''
+            '''Scene02/clone/frames/rgb/Camera_0/rgb_00000.jpg'''
+            pre_ext, ext = fname.split('.')
+            scene, env, _, _, cam, fid = pre_ext.split('/')
+            cam = int(cam.split('_')[-1])
+            fid = int(fid.split('_')[-1])
+        elif ftype == 'calib':
+            '''Scene02/clone/intrinsic.txt'''
+            pre_ext, ext = fname.split('.')
+            scene, env, _ = pre_ext.split('/')
+            cam = None
+            fid = None
+        else:
+            raise ValueError('ftype not seen')
+            
+        return ftype, ext, [scene, env, cam, fid]
+
+    def fname_from_ntp_parsed(self, ftype, scene, env, cam, fid):
+        if ftype == 'rgb':
+            fname = os.path.join(scene, env, 'frames', 'rgb', 'Camera_{:01d}'.format(cam), 'rgb_{:05d}.jpg'.format(fid))
+        elif ftype == 'depth_raw':
+            fname = os.path.join(scene, env, 'frames', 'depth', 'Camera_{:01d}'.format(cam), 'depth_{:05d}.png'.format(fid))
+        elif ftype == 'calib':
+            fname = [os.path.join(scene, env, '{}.txt'.format(f)) for f in self.calib_filenames]
+        else:
+            raise ValueError('ftype not seen')
+    
+        return fname
+
+    def get_finfo_dict(self):
+        finfos = {}
+        scenes = [ d for d in os.listdir(self.data_root) if os.path.isdir(os.path.join(self.data_root,d) )]
+        for scene in scenes:            # scene level
+            finfos[scene] = {}
+            cur_root = os.path.join(self.data_root, scene)
+            envs = [ d for d in os.listdir(cur_root) if os.path.isdir(os.path.join(cur_root,d) )]
+            for env in envs:
+                finfos[scene][env] = {}
+                cur_root_2 = os.path.join(cur_root, env)
+                cams = [0, 1]
+                for cam in cams:      # side level
+                    cur_root_3 = os.path.join(cur_root_2, 'frames', 'rgb', 'Camera_{:01d}'.format(cam))
+                    fids = os.listdir(cur_root_3)
+                    fids = [ int(fid.split('.')[0].split("_")[-1]) for fid in fids]
+                    finfos[scene][env][cam] = fids
+        return finfos
+
 class DataFinderWaymo(DataFinder):
     def __init__(self, *args, **kwargs):
         self.ftypes = ['rgb', 'depth_raw', 'lidar', 'calib', 'T_rgb']
         self.level_names = ['seq', 'side', 'fid']
         self.ofile_level_names = {'calib': ['seq'], 'T_rgb': ['seq', 'side']}
-        self.infile_level_name = {'calib': 'side', 'T_rgb': 'fid'}
+        self.infile_level_name = {'calib': ['side'], 'T_rgb': ['fid']}
 
         self.preload_ftypes = ['calib']
         # self.preload_ftypes = []
@@ -286,9 +374,9 @@ class DataFinderKITTI(DataFinder):
         self.ofile_level_names = {}
         self.infile_level_name = {}
         self.ofile_level_names['calib'] = ['date']
-        self.infile_level_name['calib'] = 'side'
+        self.infile_level_name['calib'] = ['side']
         self.ofile_level_names['T_rgb'] = ['date', 'seq', 'side']
-        self.infile_level_name['T_rgb'] = 'fid'
+        self.infile_level_name['T_rgb'] = ['fid']
 
         self.preload_ftypes = ['calib']
         # self.preload_ftypes = []
@@ -400,7 +488,7 @@ if __name__ == '__main__':
     data_root = '/mnt/storage8t/minghanz/Datasets/KITTI_data/kitti_data'
     kitti = DataFinderKITTI(data_root=data_root)
     # print(kitti.finfos)
-    print(kitti.fnames_preload['calib'])
+    # print(kitti.fnames_preload['calib'])
 
     calib_path = "2011_09_26/calib_cam_to_cam.txt"
     level_ntp = kitti.ntp_from_fname(calib_path, 'calib')    # fpaths is a list, any one of the element work
@@ -415,12 +503,12 @@ if __name__ == '__main__':
     # print(fname_depth)
 
 
-    ############## waymo
-    data_root = '/mnt/storage8t/datasets/waymo_kitti/training'
-    waymo = DataFinderWaymo(data_root=data_root)
-    print(waymo.fnames_preload['calib'])
+    # ############## waymo
+    # data_root = '/mnt/storage8t/datasets/waymo_kitti/training'
+    # waymo = DataFinderWaymo(data_root=data_root)
+    # print(waymo.fnames_preload['calib'])
 
-    calib_path = "141184560845819621_10582_560_10602_560/calib/calib_all.txt"
-    level_ntp = waymo.ntp_from_fname(calib_path, 'calib')    # fpaths is a list, any one of the element work
-    finfo_list_calib = waymo.get_finfo_list_at_level(waymo.finfos, level_ntp, waymo.infile_level_name['calib'])
-    print(finfo_list_calib)
+    # calib_path = "141184560845819621_10582_560_10602_560/calib/calib_all.txt"
+    # level_ntp = waymo.ntp_from_fname(calib_path, 'calib')    # fpaths is a list, any one of the element work
+    # finfo_list_calib = waymo.get_finfo_list_at_level(waymo.finfos, level_ntp, waymo.infile_level_name['calib'])
+    # print(finfo_list_calib)

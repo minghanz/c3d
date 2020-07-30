@@ -150,19 +150,20 @@ class CamProj(nn.Module):
         self.cam_infos = {}
         
         self.dataset_reader = dataset_reader
-        intr_dict = dataset_reader.preload_dict['calib']
-        # for key in intr_dict:
-        #     intr_dict_key0 = key
-        #     break
-        # self.intr_dict_key_levels = list(x for x in intr_dict_key0._fields if getattr(intr_dict_key0,x) is not None)
-        # intr_dict = preload_K(data_root)
-        for key in intr_dict:
-            self.cam_infos[key] = CamInfo(in_extr=intr_dict[key], batch_size=batch_size)
+        if 'calib' in dataset_reader.ffinder.preload_ftypes:
+            intr_dict = dataset_reader.preload_dict['calib']
+            # for key in intr_dict:
+            #     intr_dict_key0 = key
+            #     break
+            # self.intr_dict_key_levels = list(x for x in intr_dict_key0._fields if getattr(intr_dict_key0,x) is not None)
+            # intr_dict = preload_K(data_root)
+            for key in intr_dict:
+                self.cam_infos[key] = CamInfo(in_extr=intr_dict[key], batch_size=batch_size)
 
-            # uvb_grid, xy1_grid, self.width[key], self.height[key], K = set_from_intr(intr_dict[key].width, intr_dict[key].height, intr_dict[key].K_unit, batch_size)
-            # self.register_buffer("uvb_grid_{}_{}".format(key[0], key[1]), uvb_grid)
-            # self.register_buffer("xy1_grid_{}_{}".format(key[0], key[1]), xy1_grid)
-            # self.register_buffer("K_{}_{}".format(key[0], key[1]), K)
+                # uvb_grid, xy1_grid, self.width[key], self.height[key], K = set_from_intr(intr_dict[key].width, intr_dict[key].height, intr_dict[key].K_unit, batch_size)
+                # self.register_buffer("uvb_grid_{}_{}".format(key[0], key[1]), uvb_grid)
+                # self.register_buffer("xy1_grid_{}_{}".format(key[0], key[1]), xy1_grid)
+                # self.register_buffer("K_{}_{}".format(key[0], key[1]), K)
 
         self.batch_size = batch_size
 
@@ -180,10 +181,14 @@ class CamProj(nn.Module):
     #     side = date_side[1]
     #     return self.__getattr__("xy1_grid_{}_{}".format(date, side))
 
-    def prepare_cam_info(self, key, xy_crop=None):
+    def prepare_cam_info(self, key=None, xy_crop=None, intr=None):
         '''
         '''
-        cam_info_cur = self.cam_infos[key]
+        if key is not None:
+            cam_info_cur = self.cam_infos[key]
+        else:
+            assert intr is not None
+            cam_info_cur = CamInfo(in_extr=intr, batch_size=self.batch_size)
 
         if xy_crop is not None:
             cam_info_cropped = cam_info_cur.crop(xy_crop)

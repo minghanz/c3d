@@ -7,8 +7,8 @@ image, depth image, lidar, depth projection by lidar, transformation of an image
 import os
 import numpy as np 
 from PIL import Image
-
-from .dataset_find import DataFinderKITTI, DataFinderWaymo
+# import cv2
+from .dataset_find import DataFinderKITTI, DataFinderWaymo, DataFinderVKITTI2
 
 from .io import load_velodyne_points, read_calib_file
 from .calib import InExtr, K_mat2py, scale_K
@@ -23,7 +23,7 @@ class DataReader:
     2.3. Ftypes not in ffinder.preload_types are read by opening the file every time, using read_wo_preload(). 
     2.3.1. It is different from read_direct() because in this case, the file contains multiple items of data. Extra processing is needed to figure out which part is wanted. 
 
-    * The script is not ready for the case when ftypes in ffinder.preset_ftypes have zero or more than 1 levels in infile_level_name. 
+    * The script is not ready for the case when ftypes in ffinder.preset_ftypes have zero or more than 1 levels in infile_level_name. NOTE: infile_level_name is now a list. 7/29/2020
     * The script is not ready for the case when a missing level in ntp does not mean it is shared at that level. 
     """
     def __init__(self, dataset, data_root):
@@ -32,6 +32,8 @@ class DataReader:
             self.ffinder = DataFinderKITTI(data_root=data_root)
         elif dataset == 'waymo':
             self.ffinder = DataFinderWaymo(data_root=data_root)
+        elif dataset == 'vkitti2':
+            self.ffinder = DataFinderVKITTI2(data_root=data_root)
         else:
             raise ValueError("dataset {} not recognized".format(self.dataset_name))
 
@@ -115,7 +117,7 @@ class DataReader:
 
         ### read all items from the file or a single item. 
         exist_single = self.ffinder.infile_level_name[ftype] is None                         ### the file only contains a single item of data
-        query_single = kwargs != {} and self.ffinder.infile_level_name[ftype] in kwargs      ### kwargs specifies which item is wanted
+        query_single = kwargs != {} and all( x in kwargs for x in self.ffinder.infile_level_name[ftype])      ### kwargs specifies which item is wanted
         return_single = exist_single or query_single                                         ### otherwise more than one items will be returned
 
         if return_single:
@@ -126,9 +128,13 @@ class DataReader:
                 ntp_cur = level_ntp
             else:
                 ### if kwargs exists, convert it to the useful level which is ffinder.infile_level_name
-                finfo_item = kwargs[self.ffinder.infile_level_name[ftype]]
-                data_cur = self.one_from_preset(preset, ftype, finfo_item)
-                ntp_cur = level_ntp._replace(**{self.ffinder.infile_level_name[ftype]: finfo_item})
+                # finfo_item = kwargs[self.ffinder.infile_level_name[ftype]] ### this works when infile_level_name is a single item
+                needed_kwargs = {}
+                for x in self.ffinder.infile_level_name[ftype]:
+                    needed_kwargs[x] = kwargs[x]
+                # data_cur = self.one_from_preset(preset, ftype, finfo_item)
+                data_cur = self.one_from_preset(preset, ftype, needed_kwargs)
+                ntp_cur = level_ntp._replace(**needed_kwargs)
 
             if data_dict is None:
                 ### return the value itself
@@ -143,8 +149,11 @@ class DataReader:
 
             finfo_list_ftype = self.ffinder.get_finfo_list_at_level(self.ffinder.finfos, level_ntp, query_level=self.ffinder.infile_level_name[ftype])
             for finfo_item in finfo_list_ftype:
-                data_cur = self.one_from_preset(preset, ftype, finfo_item)
-                ntp_cur = level_ntp._replace(**{self.ffinder.infile_level_name[ftype]: finfo_item})
+                needed_kwargs = {}
+                for i, level in enumerate(self.ffinder.infile_level_name[ftype]):
+                    needed_kwargs[level] = finfo_item[i]
+                data_cur = self.one_from_preset(preset, ftype, needed_kwargs)
+                ntp_cur = level_ntp._replace(**needed_kwargs)
                 data_dict[ntp_cur] = data_cur
 
         return data_dict
@@ -183,20 +192,20 @@ class DataReader:
             raise ValueError("ftype not implemented yet")
         return
 
-    def one_from_preset(self, preset, ftype, aug=None):
+    def one_from_preset(self, preset, ftype, aug_kwargs=None):
         """Retrieve a single item of data from the content in a file of preset_ftypes. """
         assert ftype in self.ffinder.preset_ftypes
 
         if ftype == 'calib':
-            if aug is None:
+            if aug_kwargs is None:
                 return self.inex_from_calib(preset)
             else:
-                return self.inex_from_calib(preset, aug)
+                return self.inex_from_calib(preset, **aug_kwargs)
         elif ftype == 'T_rgb':
-            if aug is None:
+            if aug_kwargs is None:
                 return self.T_from_Ts(preset)
             else:
-                return self.T_from_Ts(preset, aug)
+                return self.T_from_Ts(preset, **aug_kwargs)
         else:
             raise ValueError("ftype not implemented yet")
         return
@@ -411,22 +420,110 @@ class DataReaderWaymo(DataReader):
 
         return inex
 
+class DataReaderVKITTI2(DataReader):
+    def __init__(self, *args, **kwargs):
+        super(DataReaderVKITTI2, self).__init__(dataset='vkitti2', *args, **kwargs)
+
+    def read_value_img(self, fpath):
+        """read an image whose pixel values are of specific meaning instead of RGB"""
+        value_img = Image.open(fpath)
+        value_img = np.asarray(value_img, dtype=np.float32)
+        value_img = value_img / 100.0 # see VKITTI2Dataset in monodepth2
+
+        return value_img
+
+    def load_Ts(self, fpath):
+        raise NotImplementedError
+
+    def T_from_Ts(self, T_lines, fid):
+        raise NotImplementedError
+
+    def load_calib(self, fnames):
+        calib = {}
+        if not isinstance(fnames, list):
+            fnames = [fnames]
+        for fname in fnames:
+            calib.update( self.read_calib_file_vkitti2(fname) )
+            
+        return calib
+
+    def read_calib_file_vkitti2(self, fname):
+        with open(fname) as f:
+            lines = f.readlines()
+        headline = lines[0]
+        dataarray = [[float(x) for x in line.split(" ")[2:]] for line in lines[1:]]
+        fids = [int(line.split(" ")[0]) for line in lines[1:] ]
+        cams = [int(line.split(" ")[1]) for line in lines[1:] ]
+        calib = dict()
+        n_lines = len(lines) - 1
+
+        for i in range(n_lines):
+            key = (cams[i], fids[i])
+            calib[key] = dataarray[i]
+
+        return calib
+
+    def inex_from_calib(self, calib, cam, fid):
+
+        inex = InExtr()
+        align_corner = False
+
+        calib_cur = calib[(cam, fid)]
+        cam_intr_normal = np.eye(3, dtype=np.float32)
+        cam_intr_normal[0,0] = calib_cur[0]
+        cam_intr_normal[1,1] = calib_cur[1]
+        cam_intr_normal[0,2] = calib_cur[2]
+        cam_intr_normal[1,0] = calib_cur[3]
+
+        inex.width = 1242
+        inex.height = 375
+
+
+        # Tr_velo_to_cam = calib['Tr_velo_to_cam_{}'.format(side)].reshape((4,4)).astype(np.float32)
+
+        # cam_intr = calib['P{}'.format(side)].reshape((3,4)).astype(np.float32)
+        # cam_intr = cam_intr[:, :3]
+        # dist_coeff = calib['Dist_{}'.format(side)].astype(np.float32)
+        # waymo_cam_RT=np.array([0,-1,0,0,  0,0,-1,0,   1,0,0,0,    0 ,0 ,0 ,1], dtype=np.float32).reshape(4,4)     
+        # Tr_velo_to_cam = waymo_cam_RT.dot(Tr_velo_to_cam)       # the axis swapping is merged into T_velo_cam
+
+        # waymo_cam_RT_inv = np.linalg.inv(waymo_cam_RT[:3, :3])
+        # cam_intr_normal = cam_intr.dot(waymo_cam_RT_inv)
+
+        # inex.width = 1920
+        # inex.height = 1280
+
+        K_unit = scale_K(cam_intr_normal, old_width=inex.width, old_height=inex.height, torch_mode=False, align_corner=align_corner)
+
+        inex.K_unit = K_unit
+
+        inex.P_cam_li = np.eye(3,4)
+        inex.dist_coef = np.zeros(5)
+
+        return inex
+
 if __name__ == "__main__":
     data_root_waymo = '/mnt/storage8t/datasets/waymo_kitti/training'
     data_root_kitti = '/mnt/storage8t/minghanz/Datasets/KITTI_data/kitti_data'
+    data_root_vkitti2 = '/mnt/storage8t/minghanz/Datasets/vKITTI2'
 
-    dataread = DataReaderKITTI(data_root=data_root_kitti)
-    img_path = '/mnt/storage8t/minghanz/Datasets/KITTI_data/kitti_data/2011_09_26/2011_09_26_drive_0001_sync/image_02/data/0000000005.jpg'
-    split_path = '/home/minghanz/bts/train_test_inputs/eigen_train_files_with_gt_nonstatic_jpg_fullpath.txt'
-    ftype_list = ["rgb", "depth_dense", "T_rgb", "lidar", "calib"]
+    # dataread = DataReaderKITTI(data_root=data_root_kitti)
+    # img_path = '/mnt/storage8t/minghanz/Datasets/KITTI_data/kitti_data/2011_09_26/2011_09_26_drive_0001_sync/image_02/data/0000000005.jpg'
+    # split_path = '/home/minghanz/bts/train_test_inputs/eigen_train_files_with_gt_nonstatic_jpg_fullpath.txt'
+    # ftype_list = ["rgb", "depth_dense", "T_rgb", "lidar", "calib"]
     
     # dataread = DataReaderWaymo(data_root=data_root_waymo)
     # img_path = '/mnt/storage8t/datasets/waymo_kitti/training/1083056852838271990_4080_000_4100_000/image_00/0000000000.jpg'
     # ftype_list = ['rgb', 'depth_raw', 'lidar', 'calib', 'T_rgb']
 
-    # data_dict = dataread.read_datadict_from_img_path(img_path, ftype_list)
-    # print(data_dict)
 
-    ntps = dataread.ntps_from_split_file(split_path)
-    data_dict = dataread.read_datadict_from_ntp(ntps[0], ftype_list)
+    dataread = DataReaderVKITTI2(data_root=data_root_vkitti2)
+    img_path = '/mnt/storage8t/minghanz/Datasets/vKITTI2/Scene02/clone/frames/rgb/Camera_0/rgb_00000.jpg'
+    ftype_list = ["rgb", "depth_raw", "calib"]
+
+    data_dict = dataread.read_datadict_from_img_path(img_path, ftype_list)
     print(data_dict)
+
+    # ntps = dataread.ntps_from_split_file(split_path)
+    # data_dict = dataread.read_datadict_from_ntp(ntps[0], ftype_list)
+    # print(data_dict)

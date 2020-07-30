@@ -19,7 +19,7 @@ def uint8_np_from_img_tensor(img):
     if img.ndim == 4:
         img_np = img.cpu().detach().numpy().transpose(0,2,3,1)
     else:
-        assert img.ndim == 3
+        assert img.ndim == 3, img.ndim
         img_np = img.cpu().detach().numpy().transpose(1,2,0)
         # img_np = img.permute(1,2,0).cpu().detach().numpy() # equivalent to above line
     img_np = uint8_np_from_img_np(img_np)
@@ -28,7 +28,7 @@ def uint8_np_from_img_tensor(img):
 
 def uint8_np_from_img_np(img_np):
     img_min = img_np.min()
-    assert img_min >= -1e-5
+    assert img_min >= -1e-5, img_min
     if img_min < 0:
         img_np[img_np < 0] = 0
 
@@ -42,7 +42,7 @@ def uint16_np_from_img_tensor(img):
     if img.ndim == 4:
         img_np = img.cpu().detach().numpy().transpose(0,2,3,1)
     else:
-        assert img.ndim == 3
+        assert img.ndim == 3, img.ndim
         img_np = img.cpu().detach().numpy().transpose(1,2,0)
     img_np = uint16_np_from_img_np(img_np)
     img_np = img_np.squeeze()
@@ -50,7 +50,7 @@ def uint16_np_from_img_tensor(img):
 
 def uint16_np_from_img_np(img_np):
     img_min = img_np.min()
-    assert img_min >= -1e-5
+    assert img_min >= -1e-5, img_min
     if img_min < 0:
         img_np[img_np < 0] = 0
 
