@@ -65,21 +65,46 @@ def vis_normal(normal):
     vis = normal * 0.5 + 0.5
     return vis
 
-def visdepth2realdepth_np(vis_depth, ref_depth=10):
-    dum_zero = np.zeros_like(vis_depth)
-    depth = np.where(vis_depth>0, ref_depth/vis_depth - ref_depth, dum_zero)
+# def visdepth2realdepth_np(vis_depth, ref_depth=10):
+#     dum_zero = np.zeros_like(vis_depth)
+#     depth = np.where(vis_depth>0, ref_depth/vis_depth - ref_depth, dum_zero)
+#     return depth
+
+# '''from bts/bts_utils.py'''
+# def vis_depth(depth, ref_depth=10):        ## why normalize_result in bts_main.py want to convert it to numpy?
+#     dum_zero = torch.zeros_like(depth)
+#     inv_depth = torch.where(depth>0, ref_depth/(ref_depth+depth), dum_zero)
+#     return inv_depth
+
+# def vis_depth_np(depth, ref_depth=10):        ## why normalize_result in bts_main.py convert it to numpy?
+#     dum_zero = np.zeros_like(depth)
+#     inv_depth = np.where(depth>0, ref_depth/(ref_depth+depth), dum_zero)
+#     return inv_depth
+    
+def visdepth2realdepth_np(vis_depth, ref_depth=10, min_depth=1, max_depth=80):
+    eps_a = ref_depth / (max_depth + ref_depth)
+    eps_b = min_depth
+    depth = ref_depth / (vis_depth + eps_a) - ref_depth + eps_b
     return depth
 
-'''from bts/bts_utils.py'''
-def vis_depth(depth, ref_depth=10):        ## why normalize_result in bts_main.py want to convert it to numpy?
-    dum_zero = torch.zeros_like(depth)
-    inv_depth = torch.where(depth>0, ref_depth/(ref_depth+depth), dum_zero)
-    return inv_depth
+"""from monodepth2 layers.py"""
+def vis_depth(depth, ref_depth=10, min_depth=1, max_depth=80):
+    eps_a = ref_depth / (max_depth + ref_depth)
+    eps_b = min_depth
+    zeros_ = torch.zeros_like(depth)
+    clamped_depth = torch.where(depth > 0, torch.clamp(depth, min=min_depth, max=max_depth), zeros_ )
+    disp = torch.where(clamped_depth > 0, ref_depth / (clamped_depth + ref_depth - eps_b) - eps_a, zeros_)
+    return disp
 
-def vis_depth_np(depth, ref_depth=10):        ## why normalize_result in bts_main.py convert it to numpy?
-    dum_zero = np.zeros_like(depth)
-    inv_depth = np.where(depth>0, ref_depth/(ref_depth+depth), dum_zero)
-    return inv_depth
+"""from monodepth2 layers.py"""
+def vis_depth_np(depth, ref_depth=10, min_depth=1, max_depth=80):
+    eps_a = ref_depth / (max_depth + ref_depth)
+    eps_b = min_depth
+    zeros_ = np.zeros_like(depth)
+    clamped_depth = np.where(depth > 0, torch.clamp(depth, min=min_depth, max=max_depth), zeros_ )
+    disp = np.where(clamped_depth > 0, ref_depth / (clamped_depth + ref_depth - eps_b) - eps_a, zeros_)
+    return disp
+
 
 def dep_img_bw(depth_vis, path=None, name=None):
     '''input is torch.Tensor'''
