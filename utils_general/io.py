@@ -24,8 +24,12 @@ def read_calib_file(path):
     return data
 
 def write_np_to_txt_like_kitti(f, array, name):
-    array_flat = array.reshape(-1)
-    f.write("{}: ".format(name) + " ".join(str(x) for x in array_flat) + "\n" )
+    if isinstance(array, (list, tuple, np.ndarray)):
+        if isinstance(array, np.ndarray):
+            array = array.reshape(-1)
+        f.write("{}: ".format(name) + " ".join(str(x) for x in array) + "\n" )
+    else:
+        f.write("{}: ".format(name) + str(array) + "\n" )
 
 '''from bts/bts_pre_intr.py'''
 def load_velodyne_points(filename):

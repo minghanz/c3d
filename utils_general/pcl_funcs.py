@@ -211,7 +211,7 @@ def pcl_load_viewer_fromfile(filename=None):
 
     return viewer
 
-def pcl_vis_seq(clouds, viewer=None, cam_fname=None, snapshot_fname_fmt=None, vis_normal=False):
+def pcl_vis_seq(clouds, viewer=None, cam_fname=None, snapshot_fname_fmt=None, vis_normal=False, block=False):
     """if viewer is not given, initialize one from cam_fname file.
     If cam_fname is None, initialize a default viewer.
     If snapshot_fname_fmt is not None, write snapshot of the point cloud to png file.
@@ -231,8 +231,6 @@ def pcl_vis_seq(clouds, viewer=None, cam_fname=None, snapshot_fname_fmt=None, vi
         viewer.setPointCloudRenderingProperties("PointSize", pt_size, id="cloud")   # optional, to set the point cloud size
         if vis_normal:
             viewer.addPointCloudNormals(cloud, level=10, scale=0.1, id='normal') # 'pred_grad_dir'
-        viewer.spinOnce()       # do not stop
-        # viewer.spin()         # stuck every frame
 
         if snapshot_fname_fmt is not None:
             if isinstance(snapshot_fname_fmt, list):
@@ -240,6 +238,11 @@ def pcl_vis_seq(clouds, viewer=None, cam_fname=None, snapshot_fname_fmt=None, vi
             else:
                 snap_fname = snapshot_fname_fmt.format(i)
             viewer.saveScreenshot(snap_fname+".png")
+            
+        if not block:
+            viewer.spinOnce()       # do not stop
+        else:
+            viewer.spin()         # stuck every frame
 
     if new_viewer_flag:
         viewer.close()
