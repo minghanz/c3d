@@ -1,5 +1,5 @@
 # c3d
-Package for computing Continuous 3D Loss. This package implements the C3D loss (continuous 3D loss) in the paper [Monocular Depth Prediction Through Continuous 3D Loss](https://arxiv.org/abs/2003.09763). 
+Package for computing Continuous 3D Loss. This package implements the C3D loss (continuous 3D loss) in the paper [Monocular Depth Prediction Through Continuous 3D Loss](https://arxiv.org/abs/2003.09763). The paper is accepted by IROS 2020. 
 
 Video Demo: 
 
