@@ -29,10 +29,12 @@ cd cvo_ops
 * `CamProj` (for generating camera intrinsic and extrinsics information needed by `C3DLoss`), and 
 * `DataReaderKITTI` (enabling easier retrieval of camera intrinsic and extrinsics information from KITTI dataset). 
 2. `C3DLoss` can be simply initialized as `c3d_loss = C3DLoss()`. Optionally you can create a config text file to customize the parameters. See `c3d_config_example.txt` for an example. `C3DLoss.parse_opts(f_input=$path_to_config_file$)` set the parameters specified in the config file. 
-3. `CamProj` and `DataReaderKITTI` objects should be initialized in the dataset handling part of your code. `DataReaderKITTI` takes the root path to your local KITTI dataset as initialization argument. `CamProj` takes the `DataReaderKITTI` object as initialization argument. 
+3. `CamProj` and `DataReaderKITTI` objects should be initialized in the dataset-handling part of your code. `DataReaderKITTI` takes the root path to your local KITTI dataset as initialization argument. `CamProj` takes the `DataReaderKITTI` object as initialization argument. 
 4. Camera intrinsic and extrinsics information are encapsuled in the `CamInfo` class, which is output by a `CamProj` object. `CamInfo` object is needed in `C3DLoss` forward calculation, together with RGB image, depth prediction, ground truth, and validity masks. 
 
-Implementation of the C3D loss in DORN, BTS and Monodepth2 network will be released soon. 
+Implementation of the C3D loss in DORN is open-sourced. Please check [here](https://github.com/minghanz/SupervisedDepthPrediction) as an example of using the C3D loss in an existing network. 
+
+Implementation of the C3D loss in BTS and Monodepth2 network will be released soon. 
 
 ## Note
 This repo is still under heavy constructions. The implementation is subject to change. More comments and instructions would come later. Your comments are welcomed. 
