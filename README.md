@@ -18,10 +18,9 @@ The interface for using the C3D loss is the `C3DLoss` class in `c3d_loss.py`. Yo
 This is the environment I used to work properly. Higher versions are likely to be fine, but I did encountered problem of divergence in no_grad mode when working on another environment with high version of Pytorch. The exact problem is not located yet. 
 
 ### Installing
-To use the C3D loss, you need to build the custom operation to a shared library. 
-```
-cd cvo_ops
-./install.sh
+To use the C3D loss, you need to install this library. 
+```shell
+$ python setup.py install
 ```
 ### Deploying in your own network
 1. You will need to create an instance for these classes: 

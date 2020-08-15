@@ -1,6 +1,9 @@
 ### originally in monodepth2
-
-import pcl
+try:
+    import pcl
+except:
+    import warnings
+    warnings.warn("Optional: install pcl library at https://github.com/cmpute/pcl.py to enable point cloud visualization.")
 import numpy as np
 import torch
 
