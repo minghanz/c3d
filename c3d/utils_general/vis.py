@@ -89,20 +89,36 @@ def visdepth2realdepth_np(vis_depth, ref_depth=10, min_depth=1, max_depth=80):
 
 """from monodepth2 layers.py"""
 def vis_depth(depth, ref_depth=10, min_depth=1, max_depth=80):
-    eps_a = ref_depth / (max_depth + ref_depth)
-    eps_b = min_depth
-    zeros_ = torch.zeros_like(depth)
-    clamped_depth = torch.where(depth > 0, torch.clamp(depth, min=min_depth, max=max_depth), zeros_ )
-    disp = torch.where(clamped_depth > 0, ref_depth / (clamped_depth + ref_depth - eps_b) - eps_a, zeros_)
+    if ref_depth > 0:
+        eps_a = ref_depth / (max_depth + ref_depth)
+        eps_b = min_depth
+        zeros_ = torch.zeros_like(depth)
+        clamped_depth = torch.where(depth > 0, torch.clamp(depth, min=min_depth, max=max_depth), zeros_ )
+        disp = torch.where(clamped_depth > 0, ref_depth / (clamped_depth + ref_depth - eps_b) - eps_a, zeros_)
+    else:
+        min_disp = 1 / max_depth
+        max_disp = 1 / min_depth
+        # scaled_disp = torch.where(depth > 0, 1 / depth, 0)
+        zeros_ = torch.zeros_like(depth)
+        scaled_disp = torch.where(depth > 0, torch.clamp(1 / depth, min=min_disp, max=max_disp), zeros_)
+        disp = torch.where(scaled_disp > 0, ( scaled_disp - min_disp ) / (max_disp - min_disp), zeros_)
     return disp
 
 """from monodepth2 layers.py"""
 def vis_depth_np(depth, ref_depth=10, min_depth=1, max_depth=80):
-    eps_a = ref_depth / (max_depth + ref_depth)
-    eps_b = min_depth
-    zeros_ = np.zeros_like(depth)
-    clamped_depth = np.where(depth > 0, torch.clamp(depth, min=min_depth, max=max_depth), zeros_ )
-    disp = np.where(clamped_depth > 0, ref_depth / (clamped_depth + ref_depth - eps_b) - eps_a, zeros_)
+    if ref_depth > 0:
+        eps_a = ref_depth / (max_depth + ref_depth)
+        eps_b = min_depth
+        zeros_ = np.zeros_like(depth)
+        clamped_depth = np.where(depth > 0, np.clip(depth, a_min=min_depth, a_max=max_depth), zeros_ )
+        disp = np.where(clamped_depth > 0, ref_depth / (clamped_depth + ref_depth - eps_b) - eps_a, zeros_)
+    else:
+        min_disp = 1 / max_depth
+        max_disp = 1 / min_depth
+        # scaled_disp = torch.where(depth > 0, 1 / depth, 0)
+        zeros_ = np.zeros_like(depth)
+        scaled_disp = np.where(depth > 0, np.clip(1 / depth, a_min=min_disp, a_max=max_disp), zeros_)
+        disp = np.where(scaled_disp > 0, ( scaled_disp - min_disp ) / (max_disp - min_disp), zeros_)
     return disp
 
 
