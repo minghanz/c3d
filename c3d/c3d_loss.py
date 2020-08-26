@@ -55,6 +55,9 @@ class PCL_C3D:
 #     return pcl_c3d
 
 def load_simp_pc3d(pcl_c3d, mask_grid, uvb_flat, feat_grid, feat_flat):
+    """
+    This function loads the PCL_C3D object with dense features. 
+    """
     batch_size = mask_grid.shape[0]
 
     ## grid features
@@ -67,6 +70,7 @@ def load_simp_pc3d(pcl_c3d, mask_grid, uvb_flat, feat_grid, feat_flat):
     for feat in feat_flat:
         pcl_c3d.flat.feature[feat] = []
 
+    #### masking out invalid points
     mask_flat = mask_grid.reshape(batch_size, 1, -1)
     for ib in range(batch_size):
         mask_vec = mask_flat[ib, 0]
@@ -75,6 +79,7 @@ def load_simp_pc3d(pcl_c3d, mask_grid, uvb_flat, feat_grid, feat_flat):
         for feat in feat_flat:
             pcl_c3d.flat.feature[feat].append(feat_flat[feat][[ib]][:,:, mask_vec])      # 1*C*N
     
+    #### concatenation to remove the batch dimension for more efficient processing later on
     pcl_c3d.flat.uvb = torch.cat(pcl_c3d.flat.uvb, dim=2)
     for feat in feat_flat:
         pcl_c3d.flat.feature[feat] = torch.cat(pcl_c3d.flat.feature[feat], dim=2)
@@ -83,7 +88,18 @@ def load_simp_pc3d(pcl_c3d, mask_grid, uvb_flat, feat_grid, feat_flat):
 
 def load_pc3d(pcl_c3d, depth_grid, mask_grid, xy1_grid, uvb_flat, K_cur, feat_comm_grid, feat_comm_flat, sparse, use_normal, sparse_nml_opts=None, dense_nml_op=None, return_stat=False):
     assert not (sparse_nml_opts is None and dense_nml_op is None)
-    """sparse is a bool
+    """
+    This function loads the PCL_C3D object from ingredients. 
+    0. prepare dense features in grid (B*C*H*W) and flat (B*C*N) form
+
+    1. load_simp_pc3d() load dense features in grid (B*C*H*W) and flat (1*C*N) form to pcl_c3d object. 
+    Here in the flat form, items in the batch are concatenated. The index in the batch is saved in uvb_flat, which is also 1*3*N, where the 3 corresponds to u, v, idx_in_batch. 
+    In the flat form, the points are already filtered by mask_grid, i.e. N <= B*H*W
+
+    2. calculate sparse features (e.g. normal for sparse point-clouds), and convert it back to grid form using grid_from_concat_flat_func(). 
+    This is different from step 0 as dense features usually can be conveniently calculated parallelly, while sparse feature calculation requires special care. We calculate them using operations written in cvo_ops. 
+    
+    sparse is a bool
     """
     feat_flat = EasyDict()
     feat_grid = EasyDict()
@@ -139,8 +155,13 @@ def load_pc3d(pcl_c3d, depth_grid, mask_grid, xy1_grid, uvb_flat, K_cur, feat_co
     return pcl_c3d
 
 def transform_pc3d(pcl_c3d, Ts, seq_n, K_cur, batch_n):
+    """This function construct PCL_C3D_Flat objects which is transformed to the adjacent frame. 
+    It assumes that a batch includes one or more rotating groups. 
+    For example, when seq_n=3, batch_n=6, it means a batch [a0, a1, a2, b0, b1, b2], where a0, a1, a2 are 3 sequential frames, and b0, b1, b2 are 3 sequential frames. 
+    After transformation, the batch of point clouds is transformed to the reference frame of [a1, a2, a0, b1, b2, b0]. 
+    We only construct PCL_C3D_Flat objects because the calc_inn_pc3d() function takes a PCL_C3D_Flat object and a PCL_C3D_Grid object as input. The PCL_C3D_Grid form of transformed point cloud is not used thus not necessary. 
+    """
 
-    ## conduct pose transform if needed
     ## need to transform: flat.uvb, flat.feature['xyz'], flat.feature['normal']
     ## no need to transform grid features
     
