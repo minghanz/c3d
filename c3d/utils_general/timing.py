@@ -1,11 +1,13 @@
 import time
 import torch
+import logging
 
 class TimingSingerLayer:
-    def __init__(self, layer):
+    def __init__(self, layer, logging_mode=False):
         self.cur_name = None
         self.cur_time = None
         self.layer = layer
+        self.logging_mode = logging_mode
 
     def log(self, name, cur_time=None):
         last_name = self.cur_name
@@ -13,14 +15,20 @@ class TimingSingerLayer:
         self.cur_name = name
         self.cur_time = time.time() if cur_time is None else cur_time
         if last_time is not None:
-            print(' '*int(self.layer)*2 + '{}: {} -> {}: {:.5}'.format(self.layer, last_name, self.cur_name, self.cur_time - last_time))
+            info = ' '*int(self.layer)*2 + '{}: {} -> {}: {:.5}'.format(self.layer, last_name, self.cur_name, self.cur_time - last_time)
         else: 
-            print('Initialized:', self.cur_name)
+            info = 'Initialized: '+ self.cur_name
+
+        if self.logging_mode:
+            logging.info(info)
+        else:
+            print(info)
 
 class Timing:
-    def __init__(self):
+    def __init__(self, logging_mode=False):
         self.timelist = []
         self.timetemp = {}
+        self.logging_mode = logging_mode
 
     def log(self, name, layer, cuda_sync=False):
         if cuda_sync:
@@ -29,7 +37,7 @@ class Timing:
         init_stage = len(self.timelist) == 0
 
         while layer >= len(self.timelist):
-            self.timelist.append( TimingSingerLayer(len(self.timelist)) )
+            self.timelist.append( TimingSingerLayer(len(self.timelist), self.logging_mode) )
             if len(self.timelist) == 1:
                 self.timelist[len(self.timelist)-1].log(name, cuda_sync)
             else:
@@ -50,7 +58,11 @@ class Timing:
         if cuda_sync:
             torch.cuda.synchronize()
 
-        print('{}: {:.5f}'.format(name, time.time() - self.timetemp[name]))
+        info = '{}: {:.5f}'.format(name, time.time() - self.timetemp[name])
+        if self.logging_mode:
+            logging.info(info)
+        else:
+            print(info)
         del self.timetemp[name]
 
     def log_cuda_sync(self):
