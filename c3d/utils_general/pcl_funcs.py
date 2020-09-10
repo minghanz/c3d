@@ -67,16 +67,16 @@ def pcl_from_flat_xyz(xyz, rgb=None, intensity=None, normal=None):
         batched = False
     
     if not isinstance(xyz, np.ndarray):
-        xyz = xyz.cpu().numpy().swapaxes(-1, -2)
+        xyz = xyz.detach().cpu().numpy().swapaxes(-1, -2)
         if rgb is not None:
-            rgb = rgb.cpu().numpy().swapaxes(-1, -2)
+            rgb = rgb.detach().cpu().numpy().swapaxes(-1, -2)
         if intensity is not None:
-            intensity = intensity.cpu().numpy()
+            intensity = intensity.detach().cpu().numpy()
             inten_has_c = intensity.ndim==3 if batched else intensity.ndim==2
             if inten_has_c:
                 intensity = intensity.swapaxes(-1, -2)
         if normal is not None:
-            normal = normal.cpu().numpy().swapaxes(-1, -2)
+            normal = normal.detach().cpu().numpy().swapaxes(-1, -2)
     
     if batched:
         clouds = []
@@ -102,21 +102,22 @@ def pcl_from_grid_xy1_dep(xy1, depth, rgb=None, intensity=None, normal=None):
     else:
         batched = False
 
+    ### transform (B*)C*H*W tensor to (B*)H*W*C numpy array (for depth, transform to (B*)H*W )
     if not isinstance(xy1, np.ndarray):
         xy1 = np.moveaxis(xy1.cpu().numpy(), -3, -1)
-        depth = depth.cpu().numpy()
+        depth = depth.detach().cpu().numpy()
         depth_has_c = depth.ndim==4 if batched else depth.ndim==3
         if depth_has_c:
             depth = np.moveaxis(depth, -3, -1)[..., 0] ### remove the channel dim for depth so that mask does not have channel dim
         if rgb is not None:
-            rgb = np.moveaxis(rgb.cpu().numpy(), -3, -1)
+            rgb = np.moveaxis(rgb.detach().cpu().numpy(), -3, -1)
         if intensity is not None:
-            intensity = intensity.cpu().numpy()
+            intensity = intensity.detach().cpu().numpy()
             inten_has_c = intensity.ndim==4 if batched else intensity.ndim==3
             if inten_has_c:
                 intensity = np.moveaxis(intensity, -3, -1)
         if normal is not None:
-            normal = np.moveaxis(normal.cpu().numpy(), -3, -1)
+            normal = np.moveaxis(normal.detach().cpu().numpy(), -3, -1)
     
     if batched:
         clouds = []

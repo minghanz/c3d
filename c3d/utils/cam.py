@@ -33,6 +33,10 @@ from ..utils_general.calib import scale_K, crop_and_scale_K, lidar_to_depth
 CamScale = namedtuple('CamScale', ['scale', 'new_width', 'new_height', 'align_corner'])
 CamCrop = namedtuple('CamCrop', ['x_start', 'y_start', 'x_size', 'y_size'])
 CamRotate = namedtuple('CamRotate', ['angle_deg', 'nearest'])
+CamFlip = namedtuple('CamFlip', ['hori', 'vert'])
+
+CamScale.__new__.__defaults__ = (None,) * len(CamScale._fields)
+
 
 '''This is to get a cam_op from a batched version of it.'''
 def extract_single_op(cam_op, idx=0):

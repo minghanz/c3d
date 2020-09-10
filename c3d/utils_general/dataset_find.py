@@ -9,11 +9,22 @@ from collections import namedtuple
 # DatasetFInfo = namedtuple('DatasetFInfo', ['ftype', 'ext', 'level_ntp'])
 
 # level_ntuple = {}
+### Define the named tuples outside of DataFinder class to enable pickling. 
+level_ntuple_vkitti2 = namedtuple('level_ntuple_vkitti2', ['scene', 'env', 'cam', 'fid'])
+level_ntuple_vkitti2.__new__.__defaults__ = (None,) * len(level_ntuple_vkitti2._fields) 
+level_ntuple_kitti = namedtuple('level_ntuple_kitti', ['date', 'seq', 'side', 'fid'])
+level_ntuple_kitti.__new__.__defaults__ = (None,) * len(level_ntuple_kitti._fields) 
+level_ntuple_waymo = namedtuple('level_ntuple_waymo', ['seq', 'side', 'fid'])
+level_ntuple_waymo.__new__.__defaults__ = (None,) * len(level_ntuple_waymo._fields) 
+level_ntuple = {}
+level_ntuple["vkitti2"] = level_ntuple_vkitti2
+level_ntuple["kitti"] = level_ntuple_kitti
+level_ntuple["waymo"] = level_ntuple_waymo
 
-def set_ntp(name, level_names):
-    global level_ntuple
-    level_ntuple = namedtuple('level_ntuple', level_names)
-    level_ntuple.__new__.__defaults__ = (None,) * len(level_ntuple._fields)
+# def set_ntp(name, level_names):
+#     global level_ntuple
+#     level_ntuple = namedtuple('level_ntuple', level_names)
+#     level_ntuple.__new__.__defaults__ = (None,) * len(level_ntuple._fields) # https://stackoverflow.com/a/18348004 
 
 def retrieve_at_level(data, *args):
     '''This function is to read from a nested dict with given list of keys of arbitrary depth. The keys should be on consecutive levels from the top. 
@@ -32,9 +43,7 @@ class DataFinder:
         # self.level_ntuple = namedtuple('level_'+name, self.level_names)
         # self.level_ntuple.__qualname__ = 'DataFinder.level_'+name
         # self.level_ntuple = namedtuple('level_ntuple', self.level_names)
-        set_ntp('level_'+name, self.level_names)
-        # level_ntuple[self.name] = namedtuple('level_'+name, self.level_names)
-        # level_ntuple[self.name].__new__.__defaults__ = (None,) * len(level_ntuple[self.name]._fields)   # https://stackoverflow.com/a/18348004 
+        # set_ntp('level_'+name, self.level_names)
         
         # ### attribute lookup failed
         # setattr(self, 'level_'+name, self.level_ntuple)
@@ -56,7 +65,7 @@ class DataFinder:
         # keys = sorted(keys, key=lambda x:self.level_names.index(x))
         i = len(keys)
         if i == len(self.level_names):
-            output_ntps.append(level_ntuple(*keys))
+            output_ntps.append(level_ntuple[self.name](*keys))
         else:
             if self.level_names[i] not in levels:
                 for key in finfo_dict:
@@ -102,7 +111,7 @@ class DataFinder:
         if self.data_root in fname:
             fname = os.path.relpath(fname, self.data_root)
         ftype, ext, level_items = self.ntp_from_fname_parse(fname, ftype)
-        level_ntp = level_ntuple(*level_items)     # create a namedtuple from an unpacked list
+        level_ntp = level_ntuple[self.name](*level_items)     # create a namedtuple from an unpacked list
         # finfo = DatasetFInfo(ftype=ftype, ext=ext, level_ntp=level_ntp)
         return level_ntp
 
@@ -119,7 +128,7 @@ class DataFinder:
         """Get the list of all filepaths of a ftype"""
         if len(level_list) == desired_depth:
             ### with default values set for namedtuple, no need to manually fill in dummy fields
-            ntp = level_ntuple(*level_list)
+            ntp = level_ntuple[self.name](*level_list)
             fnames = self.fname_from_ntp(ntp, ftype)
             fnames_dict_to_write[ntp] = fnames
         else:
@@ -200,7 +209,7 @@ class DataFinder:
         for level in wanted_levels:
             wanted_dict[level] = tmp_dict[level]
 
-        new_ntp = level_ntuple(**wanted_dict)
+        new_ntp = level_ntuple[self.name](**wanted_dict)
 
         return new_ntp
 

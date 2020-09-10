@@ -7,7 +7,7 @@ import sys
 # script_path = os.path.dirname(__file__)
 # sys.path.append(os.path.join(script_path, '../../pytorch-unet'))
 # from geometry import rgb_to_hsv
-from .utils_general.color import rgb_to_hsv
+from .utils_general.color import rgb_to_hsv, hsv_to_rgb
 
 # sys.path.append(os.path.join(script_path, '../../monodepth2'))
 # from cvo_utils import *
@@ -18,6 +18,12 @@ from .utils.cam_proj import *
 
 import argparse
 from .utils_general.argparse_f import init_argparser_f
+from .utils_general.vis import overlay_dep_on_rgb, dep_img_bw
+
+from .utils_general.pcl_funcs import pcl_from_flat_xyz, pcl_from_grid_xy1_dep, pcl_write
+
+import torchsnooper
+import pickle
 
 class PCL_C3D_Flat:
     def __init__(self):
@@ -25,10 +31,46 @@ class PCL_C3D_Flat:
         self.nb = []
         self.feature = EasyDict()
 
+    # def to_pcd(self):
+    #     xyz = self.feature.xyz
+    #     rgb = hsv_to_rgb(self.feature.hsv, flat=True)
+    #     uvb = self.uvb  # 1*3*N
+    #     batch_size = len(self.nb)
+    #     clouds = []
+    #     for ib in range(batch_size):
+    #         ib_mask = uvb[0,2] == ib
+    #         xyz_i = xyz[0,:,ib_mask]
+    #         rgb_i = rgb[0,:,ib_mask]
+
+    #         cloud_i = pcl_from_flat_xyz(xyz_i, rgb_i)
+    #         clouds.append(cloud_i)
+
+    #     return clouds
+
 class PCL_C3D_Grid:
     def __init__(self):
         self.mask = None
         self.feature = EasyDict()
+
+    # def to_pcd(self):
+    #     xyz = self.feature.xyz
+    #     rgb = hsv_to_rgb(self.feature.hsv)
+    #     xyz = xyz.permute(0,2,3,1)
+    #     rgb = rgb.permute(0,2,3,1)  # B*H*W*C
+    #     mask = self.mask
+
+    #     batch_size = xyz.shape[0]
+    #     clouds = []
+    #     for ib in range(batch_size):
+    #         mask_i = mask[ib,0]
+    #         xyz_i = xyz[ib][mask_i]
+    #         rgb_i = rgb[ib][mask_i]
+
+    #         cloud_i = pcl_from_flat_xyz(xyz_i.transpose(0,1), rgb_i.transpose(0,1))
+    #         clouds.append(cloud_i)
+
+    #     return clouds
+
 
 class PCL_C3D:
     def __init__(self):
@@ -86,6 +128,8 @@ def load_simp_pc3d(pcl_c3d, mask_grid, uvb_flat, feat_grid, feat_flat):
 
     return pcl_c3d
 
+
+# @torchsnooper.snoop()
 def load_pc3d(pcl_c3d, depth_grid, mask_grid, xy1_grid, uvb_flat, K_cur, feat_comm_grid, feat_comm_flat, sparse, use_normal, sparse_nml_opts=None, dense_nml_op=None, return_stat=False):
     assert not (sparse_nml_opts is None and dense_nml_op is None)
     """
@@ -202,7 +246,7 @@ def transform_pc3d(pcl_c3d, Ts, seq_n, K_cur, batch_n):
 
         ## project to uv, add b
         uvb = torch.matmul(K_cur[ib], trans_xyz)
-        uvb[:, :2] = uvb[:, :2] / uvb[:, [2]] - 1
+        uvb[:, :2] = uvb[:, :2] / uvb[:, [2]] #- 1 , commented because in dataset_read.py there is a K_mat2py() function converting K from matlab to python coordinate
         uvb[:, 2, :] = target_id[ib]
         uvb_list.append(uvb)
 
@@ -248,15 +292,157 @@ def relative_T(Ts, seq_n, batch_size):
     
     return T, R, t, target_id
 
+'''from bts/bts_pre_intr.py'''
+def sub2ind(matrixSize, batchSub, rowSub, colSub):
+    """Convert row, col matrix subscripts to linear indices
+    """
+    b, h, w = matrixSize
+    return batchSub * (h*w) + rowSub * (w-1) + colSub
+
+def flow_pc3d(pcl_c3d, flow_grid, flow_mask_grid, K_cur, feat_comm_keys, use_normal, sparse_nml_opts=None, return_stat=False):
+    """
+    This function construct PCL_C3D_Flat objects which is transformed by the 3D scene flow.
+    """
+    batch_size = flow_grid.shape[0]
+
+    ### compose the flow to xyz
+    xyz_grid = pcl_c3d.grid.feature['xyz']
+    xyz_flat = xyz_grid.reshape(batch_size, 3, -1)
+    flow_flat = flow_grid.reshape(batch_size, 3, -1)
+    xyz_flowed_flat = xyz_flat + flow_flat
+
+    ### mask out invalid pixels and project to image uv coordinate
+    xyz_mask_grid = pcl_c3d.grid.mask
+    if flow_mask_grid is not None:
+        mask_grid = xyz_mask_grid & flow_mask_grid
+    else:
+        mask_grid = xyz_mask_grid 
+    mask_flat = mask_grid.reshape(batch_size, 1, -1)
+
+    xyz_flowed_flat_list = [None]*batch_size
+    uvb_list = [None]*batch_size
+    new_nb = [None]*batch_size
+    inview_mask_list = [None]*batch_size
+    
+    for ib in range(batch_size):
+        mask_vec = mask_flat[ib, 0]
+        xyz_flowed_flat_cur = xyz_flowed_flat[[ib]][:,:,mask_vec]  # 1*3*N
+
+        uvb = torch.matmul(K_cur[ib], xyz_flowed_flat_cur) # 1*3*N
+        uvb = (uvb / uvb[:, [2]]).round() #- 1 , commented because in dataset_read.py there is a K_mat2py() function converting K from matlab to python coordinate
+        uvb[:, 2] = ib
+        uvb_list[ib] = uvb
+
+        ### check whether the new points are in the view of camera
+        inview_mask = (uvb[0,0,:] > 0) & (uvb[0,0,:] < mask_grid.shape[3]) & (uvb[0,1,:] > 0) & (uvb[0,1,:] < mask_grid.shape[2]) & (xyz_flowed_flat_cur[0,2,:] > 0)
+        inview_mask_list[ib] = inview_mask
+
+        xyz_flowed_flat_cur = xyz_flowed_flat_cur[:,:,inview_mask]
+        uvb = uvb[:,:,inview_mask]
+        xyz_flowed_flat_list[ib] = xyz_flowed_flat_cur
+        uvb_list[ib] = uvb
+
+        new_nb[ib] = uvb.shape[2]
+    
+    xyz_flowed_flat = torch.cat(xyz_flowed_flat_list, dim=2)
+    uvb_flat = torch.cat(uvb_list, dim=2)
+
+    ### find the duplicate points and filter out those not close to the camera
+    occlu_mask = torch.ones(uvb_flat.shape[2], dtype=torch.bool, device=mask_grid.device)
+
+    uvb_dim = [xyz_grid.shape[0], xyz_grid.shape[2], xyz_grid.shape[3]]
+    velo_proj_lin = sub2ind(uvb_dim, uvb_flat[0, 2, :], uvb_flat[0, 1, :], uvb_flat[0, 0, :] )  # B, H, W
+    dupe_proj_lin = [item for item, count in Counter(velo_proj_lin).items() if count > 1]
+    for dd in dupe_proj_lin:
+        pts = torch.where(velo_proj_lin == dd)[0] ### torch.where() [actually torch.nonzero(condition, as_tuple=True)] returns a tuple. [0] takes the array of the first dim.
+        z_min = 1e7
+        for pt_idx in pts:
+            z_cur = xyz_flowed_flat[0, 2, pt_idx]
+            if z_cur < z_min:
+                z_min = z_cur
+                min_idx = pt_idx
+            else:
+                occlu_mask[pts] = False
+                ib = uvb_flat[0, 2, pt_idx]
+                new_nb[ib] -= 1
+    
+    xyz_flowed_flat = xyz_flowed_flat[:,:,occlu_mask]
+    uvb_flat = uvb_flat[:,:,occlu_mask]
+
+    ### construct PCL_C3D_Flat
+    flow_pcl_c3d_flat = PCL_C3D_Flat()
+    flow_pcl_c3d_flat.uvb = uvb_flat
+    flow_pcl_c3d_flat.feature['xyz'] = xyz_flowed_flat
+    flow_pcl_c3d_flat.nb = new_nb
+
+    ### need to exit early if empty, otherwise later processing will produce unpredicted result and failure in next iteration
+    if any(n <= 0 for n in new_nb):
+        return flow_pcl_c3d_flat, None
+    #     raise ValueError("empty pcl: {}".format(new_nb))
+
+    ### copy those shared features from original point cloud. Remember to apply the same masking.
+    for feat in feat_comm_keys:
+        feat_flat = pcl_c3d.grid.feature[feat].reshape(batch_size, 3, -1)
+        feat_flat_list = [None]*batch_size
+        for ib in range(batch_size):
+            mask_vec = mask_flat[ib, 0]
+            feat_flat_list[ib] = feat_flat[[ib]][:,:,mask_vec]
+
+            ### filter out out-of-view points
+            feat_flat_list[ib] = feat_flat_list[ib][:,:,inview_mask_list[ib]]
+
+        feat_flat_concat = torch.cat(feat_flat_list, dim=2)
+        ### filter out points duplicated on image
+        flow_pcl_c3d_flat.feature[feat] = feat_flat_concat[:,:,occlu_mask]
+
+    ### prepare xyz_grid of the flowed point cloud
+    uvb_split = uvb_flat.to(dtype=torch.long).squeeze(0).transpose(0,1).split(1,dim=1) # a tuple of 3 elements of tensor N*1, only long/byte/bool tensors can be used as indices
+    xyz_flowed_grid = grid_from_concat_flat_func(uvb_split, xyz_flowed_flat, xyz_grid.shape)
+    mask_flowed_grid = (xyz_flowed_grid != 0).any(1, keepdim=True)
+
+    ### calculate sparse normal
+    if use_normal:
+        if return_stat:
+            normal_flat, nres_flat, dist_stat_flat = calc_normal(flow_pcl_c3d_flat.uvb, xyz_flowed_grid, mask_flowed_grid, sparse_nml_opts.normal_nrange, sparse_nml_opts.ignore_ib, sparse_nml_opts.min_dist_2, return_stat=return_stat)
+        else:
+            normal_flat, nres_flat = calc_normal(flow_pcl_c3d_flat.uvb, xyz_flowed_grid, mask_flowed_grid, sparse_nml_opts.normal_nrange, sparse_nml_opts.ignore_ib, sparse_nml_opts.min_dist_2, return_stat=return_stat)
+        
+        flow_pcl_c3d_flat.feature['normal'] = normal_flat
+        flow_pcl_c3d_flat.feature['nres'] = nres_flat
+
+        if return_stat:
+            flow_pcl_c3d_flat.feature['dist_stat'] = dist_stat_flat
+
+    ### construct PCL_C3D_Grid
+    flow_pcl_c3d_grid = PCL_C3D_Grid()
+    flow_pcl_c3d_grid.mask = mask_flowed_grid
+    flow_pcl_c3d_grid.feature['xyz'] = xyz_flowed_grid
+
+    for feat in feat_comm_keys:
+        flow_pcl_c3d_grid.feature[feat] = grid_from_concat_flat_func(uvb_split, flow_pcl_c3d_flat.feature[feat], pcl_c3d.grid.feature[feat].shape)
+
+    if use_normal:
+        flow_pcl_c3d_grid.feature['normal'] = grid_from_concat_flat_func(uvb_split, flow_pcl_c3d_flat.feature['normal'], pcl_c3d.grid.feature['normal'].shape)
+        flow_pcl_c3d_grid.feature['nres'] = grid_from_concat_flat_func(uvb_split, flow_pcl_c3d_flat.feature['nres'], pcl_c3d.grid.feature['nres'].shape)
+        if return_stat:
+            flow_pcl_c3d_grid.feature['dist_stat'] = grid_from_concat_flat_func(uvb_split, flow_pcl_c3d_flat.feature['dist_stat'], pcl_c3d.grid.feature['dist_stat'].shape)        
+
+    return flow_pcl_c3d_flat, flow_pcl_c3d_grid
+
 class C3DLoss(nn.Module):
-    def __init__(self, seq_frame_n=1):
+    def __init__(self, seq_frame_n=1, flow_mode=False):
         super(C3DLoss, self).__init__()
         self.seq_frame_n = seq_frame_n
+        self.flow_mode = flow_mode
 
         self.feat_inp_self = ["xyz", "hsv"]
         self.feat_inp_cross = ["xyz", "hsv"]
 
+        self.feat_comm = ["hsv"] ### features invariant to transformation (rigid-body transformation or flow)
+
         self.normal_op_dense = NormalFromDepthDense()
+
+        self.internal_count = 0     ### the internal count is to differentiate different forward passes when we debug the input and write them to files. 
 
     def parse_opts(self, inputs=None, f_input=None):
         # parser = argparse.ArgumentParser(description='Options for continuous 3D loss')
@@ -299,7 +485,11 @@ class C3DLoss(nn.Module):
         parser.add_argument("--cross_gt_pred_weight",        type=float, default=0,
                             help="weight of c3d loss between predictions and gt from another frame, relative to gt_pred_weight as 1. You may want to set to 1. ")
 
-        
+        parser.add_argument("--debug_input",           action="store_true", 
+                            help="if set, write the input depth, rgb, etc. to file to show whether the input is correct. ")
+        parser.add_argument("--debug_path",            type=str, required=False, default=None, 
+                            help="the path to output debug files. Required if debug_input is True")
+
         if f_input is None:
             ### take parsed args or sys.argv[1:] as input
             self.opts, rest = parser.parse_known_args(args=inputs) # inputs can be None, in which case _sys.argv[1:] are parsed
@@ -330,42 +520,314 @@ class C3DLoss(nn.Module):
 
         return rest
 
-    def forward(self, rgb, depth, depth_gt, depth_mask, depth_gt_mask, cam_info, nkern_fname=None, Ts=None):
+    def gen_rand_ell(self):
+        ells = {}
+        ell = {}
+        for key in self.opts.ell_keys:
+            ell[key] = self.opts.ell_min[key] + np.abs(self.opts.ell_rand[key]* np.random.normal()) 
+        ells["pred_gt"] = ell
+
+        if self.opts.cross_pred_pred_weight > 0:
+            ell_predpred = {}
+            for key in self.opts.ell_keys:
+                ell_predpred[key] = self.opts.ell_min_predpred[key] + np.abs(self.opts.ell_rand_predpred[key]* np.random.normal())
+            ells["pred_pred"] = ell_predpred
+            
+        return ells
+
+    def forward(self, rgb=None, depth=None, depth_gt=None, depth_mask=None, depth_gt_mask=None, cam_info=None, nkern_fname=None, Ts=None, 
+                depth_img_dict_1=None, depth_img_dict_2=None, flow_dict_1to2=None, flow_dict_2to1=None):
         """
         rgb: B*3*H*W
         depth, depth_gt, depth_mask, depth_gt_mask: B*1*H*W
         """
+        self.internal_count += 1
 
-        return self.forward_with_caminfo(rgb, depth, depth_gt, depth_mask, depth_gt_mask, nkern_fname, Ts, cam_info)
+        if not self.flow_mode:
+            return self.forward_with_caminfo(rgb, depth, depth_gt, depth_mask, depth_gt_mask, nkern_fname, Ts, cam_info)
+        else:
+            return self.forward_with_flow(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname)
 
-    def forward_with_caminfo(self, rgb, depth, depth_gt, depth_mask, depth_gt_mask, nkern_fname, Ts, cam_info):
+    def load_pc3d(self, depth_img_dict, cam_info):
+        ## ---------------------------------
+        ## unpack the depth info
+        ## ---------------------------------
+        depth = depth_img_dict["pred"]
+        depth_mask = depth_img_dict["pred_mask"]
+        depth_gt = depth_img_dict["gt"]
+        depth_gt_mask = depth_img_dict["gt_mask"]
+        rgb = depth_img_dict['rgb']
+
+        ## ---------------------------------
+        ## load PCL_C3D objects
+        ## ---------------------------------
         batch_size = rgb.shape[0]
         
         K_cur, width_cur, height_cur, xy1_grid_cur, uvb_grid_cur = cam_info.unpack()
 
         uvb_flat_cur = uvb_grid_cur.reshape(batch_size, 3, -1)
 
-        self.pc3ds = EasyDict()
-        # self.pc3ds["gt"] = init_pc3d()
-        # self.pc3ds["pred"] = init_pc3d()
-        self.pc3ds["gt"] = PCL_C3D()
-        self.pc3ds["pred"] = PCL_C3D()
+        pc3ds = EasyDict()
+        pc3ds["gt"] = PCL_C3D()
+        pc3ds["pred"] = PCL_C3D()
 
         ## rgb to hsv
         hsv = rgb_to_hsv(rgb, flat=False)           # B*3*H*W
         hsv_flat = hsv.reshape(batch_size, 3, -1)   # B*3*N
 
-        feat_comm_grid = {}
-        feat_comm_grid['hsv'] = hsv
-        feat_comm_flat = {}
-        feat_comm_flat['hsv'] = hsv_flat
+        feat_comm_grid = {'hsv': hsv}
+        feat_comm_flat = {'hsv': hsv_flat}
+
+        assert set(list(feat_comm_grid.keys())) == set(self.feat_comm), "{}, {}".format(list(feat_comm_grid.keys()), self.feat_comm)
         
         ## generate PCL_C3D object
-        self.pc3ds["gt"] = load_pc3d(self.pc3ds["gt"], depth_gt, depth_gt_mask, xy1_grid_cur, uvb_flat_cur, K_cur, feat_comm_grid, feat_comm_flat, 
+        pc3ds["gt"] = load_pc3d(pc3ds["gt"], depth_gt, depth_gt_mask, xy1_grid_cur, uvb_flat_cur, K_cur, feat_comm_grid, feat_comm_flat, 
                                         sparse=True, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts, return_stat=self.opts.norm_return_stat)
-        self.pc3ds["pred"] = load_pc3d(self.pc3ds["pred"], depth, depth_mask, xy1_grid_cur, uvb_flat_cur, K_cur, feat_comm_grid, feat_comm_flat, 
+        pc3ds["pred"] = load_pc3d(pc3ds["pred"], depth, depth_mask, xy1_grid_cur, uvb_flat_cur, K_cur, feat_comm_grid, feat_comm_flat, 
                                         sparse=False, use_normal=self.opts.use_normal, dense_nml_op=self.normal_op_dense, return_stat=self.opts.norm_return_stat)
+        return pc3ds
 
+    def debug_flow_input_to_imgs(self, depth_img_dict_1, depth_img_dict_2):
+        for i, depth_img_dict in enumerate([depth_img_dict_1, depth_img_dict_2]):
+
+            depth = depth_img_dict["pred"]
+            depth_mask = depth_img_dict["pred_mask"]
+            depth_gt = depth_img_dict["gt"]
+            depth_gt_mask = depth_img_dict["gt_mask"]
+            rgb = depth_img_dict['rgb']
+            print(depth)
+
+            batch_size = depth_gt.shape[0]
+
+            path = self.opts.debug_path
+            name = "n{:04d}_b{}_s{}_{}.jpg"
+            for ib in range(batch_size):
+                overlay_dep_on_rgb(depth_gt[ib], rgb[ib], path=path, name=name.format(self.internal_count, ib, i, "dep_gt"))
+                overlay_dep_on_rgb(depth[ib], rgb[ib], path=path, name=name.format(self.internal_count, ib, i, "dep_pred"), overlay=False)
+                dep_img_bw(depth_mask[ib], path=path, name=name.format(self.internal_count, ib, i, "mask_pred"))
+                dep_img_bw(depth_gt_mask[ib], path=path, name=name.format(self.internal_count, ib, i, "mask_gt"))
+        
+        return
+
+    def debug_flow_dump_pickle(self, depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info):
+        dump_path = os.path.join(self.opts.debug_path, "nan_dicts.pkl")
+        if not os.path.exists(os.path.dirname(dump_path)):
+            os.makedirs(os.path.dirname(dump_path))
+
+        with open(dump_path, "wb") as f:
+            pickle.dump(depth_img_dict_1, f)
+            pickle.dump(depth_img_dict_2, f)
+            pickle.dump(flow_dict_1to2, f)
+            pickle.dump(flow_dict_2to1, f)
+            pickle.dump(cam_info, f)
+        return
+
+    def debug_flow_load_pickle(self, pickle_path):
+        with open(pickle_path, "rb") as f:
+            depth_img_dict_1 = pickle.load(f)
+            depth_img_dict_2 = pickle.load(f)
+            flow_dict_1to2 = pickle.load(f)
+            flow_dict_2to1 = pickle.load(f)
+            cam_info = pickle.load(f)
+        return depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info
+            
+    def debug_flow_dep_to_pcd(self, depth_img_dict, cam_info):
+        depth = depth_img_dict["pred"]
+        depth_mask = depth_img_dict["pred_mask"]
+        depth_gt = depth_img_dict["gt"]
+        depth_gt_mask = depth_img_dict["gt_mask"]
+        rgb = depth_img_dict['rgb']
+
+        K_cur, width_cur, height_cur, xy1_grid_cur, uvb_grid_cur = cam_info.unpack()
+
+        clouds_pred = pcl_from_grid_xy1_dep(xy1_grid_cur, depth, rgb=rgb)
+        clouds_gt = pcl_from_grid_xy1_dep(xy1_grid_cur, depth_gt, rgb=rgb)
+
+        return clouds_pred, clouds_gt
+
+    def debug_flow_depflow_to_pcd(self, depth_img_dict, flow_dict, cam_info):
+        depth = depth_img_dict["pred"]
+        depth_mask = depth_img_dict["pred_mask"]
+        depth_gt = depth_img_dict["gt"]
+        depth_gt_mask = depth_img_dict["gt_mask"]
+        rgb = depth_img_dict['rgb']
+
+        flow = flow_dict["pred"]
+        flow_mask = flow_dict["mask"]
+
+        K_cur, width_cur, height_cur, xy1_grid_cur, uvb_grid_cur = cam_info.unpack()
+        
+        batch_size = depth.shape[0]
+
+        xy1_grid_cur = xy1_grid_cur.permute(0,2,3,1)
+        depth = depth.permute(0,2,3,1)  # B*H*W*C
+        rgb = rgb.permute(0,2,3,1)  # B*H*W*C
+        flow = flow.permute(0,2,3,1)  # B*H*W*C
+
+        depth_mask = depth_mask.permute(0,2,3,1)  # B*H*W*C
+        flow_mask = flow_mask.permute(0,2,3,1) if flow_mask is not None else flow_mask  # B*H*W*C
+        mask = flow_mask & depth_mask if flow_mask is not None else depth_mask
+        mask = mask.squeeze(3)  # B*H*W
+
+        clouds = []
+        for ib in range(batch_size):
+            mask_i = mask[ib]
+            depth_i = depth[ib][mask_i] #N*C
+            xy1_i = xy1_grid_cur[ib][mask_i]
+            xyz = xy1_i * depth_i
+            flow_i = flow[ib][mask_i]
+            xyz_flowed = xyz + flow_i
+            rgb_i = rgb[ib][mask_i]
+            cloud_i = pcl_from_flat_xyz(xyz_flowed.transpose(0,1), rgb=rgb_i.transpose(0,1))
+            clouds.append(cloud_i)
+        return clouds
+
+    def debug_flow_input_to_pcds_raw(self, depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info):
+
+        ### load four point clouds predictions and two ground truths to pcd file
+        clouds_pred_1, clouds_gt_1 = self.debug_flow_dep_to_pcd(depth_img_dict_1, cam_info)
+        clouds_pred_2, clouds_gt_2 = self.debug_flow_dep_to_pcd(depth_img_dict_2, cam_info)
+
+        clouds_flowed_2_from_1 = self.debug_flow_depflow_to_pcd(depth_img_dict_1, flow_dict_1to2, cam_info)
+        clouds_flowed_1_from_2 = self.debug_flow_depflow_to_pcd(depth_img_dict_2, flow_dict_2to1, cam_info)
+
+        path = self.opts.debug_path
+        name = "n{:04d}_b{}_s{}_{}"
+        batch_size = len(clouds_pred_1)
+        assert batch_size == len(clouds_gt_1) and batch_size == len(clouds_pred_2) and batch_size == len(clouds_gt_2)
+        for ib in range(batch_size):
+            pcl_write(clouds_pred_1[ib], os.path.join(path, name.format(self.internal_count, ib, 0, "pred") ) )
+            pcl_write(clouds_pred_2[ib], os.path.join(path, name.format(self.internal_count, ib, 1, "pred") ) )
+            pcl_write(clouds_gt_1[ib], os.path.join(path, name.format(self.internal_count, ib, 0, "gt") ) )
+            pcl_write(clouds_gt_2[ib], os.path.join(path, name.format(self.internal_count, ib, 1, "gt") ) )
+            pcl_write(clouds_flowed_2_from_1[ib], os.path.join(path, name.format(self.internal_count, ib, 1, "flowed") ) )
+            pcl_write(clouds_flowed_1_from_2[ib], os.path.join(path, name.format(self.internal_count, ib, 0, "flowed") ) )
+
+        return
+
+    def debug_flow_inspect_input(self, pickle_path):
+        """This is to """
+        ### unpickle
+        depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info = self.debug_flow_load_pickle(pickle_path)
+        ### visualize input depth and mask
+        self.debug_flow_input_to_imgs(depth_img_dict_1, depth_img_dict_2)
+        self.debug_flow_input_to_pcds_raw(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
+
+        ### calculate the inner product
+        inp_total = self.forward_with_flow(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
+
+        return inp_total
+
+    # @torchsnooper.snoop()
+    def forward_with_flow(self, depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname):
+        if self.opts.debug_input:
+            self.debug_flow_input_to_imgs(depth_img_dict_1, depth_img_dict_2)
+            self.debug_flow_input_to_pcds_raw(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
+            self.debug_flow_dump_pickle(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
+        ## ---------------------------------
+        ## unpack the depth info
+        ## ---------------------------------
+        pc3ds_1 = self.load_pc3d(depth_img_dict_1, cam_info)
+        pc3ds_2 = self.load_pc3d(depth_img_dict_2, cam_info)
+
+        ## ---------------------------------
+        ## optionally, load PCL_C3D objects after scene flow propagation
+        ## ---------------------------------
+        K_cur, width_cur, height_cur, xy1_grid_cur, uvb_grid_cur = cam_info.unpack()
+
+        pc3ds_pred_flat_2from1, pc3ds_pred_grid_2from1 = flow_pc3d(pc3ds_1["pred"], flow_dict_1to2["pred"], flow_dict_1to2["mask"], K_cur, 
+                                        self.feat_comm, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts, return_stat=self.opts.norm_return_stat)
+        
+        pc3ds_pred_flat_1from2, pc3ds_pred_grid_1from2 = flow_pc3d(pc3ds_2["pred"], flow_dict_2to1["pred"], flow_dict_2to1["mask"], K_cur, 
+                                        self.feat_comm, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts, return_stat=self.opts.norm_return_stat)
+        
+        ## ---------------------------------
+        ## configure length scale of kernels
+        ## ---------------------------------
+        ell = self.gen_rand_ell()
+
+        ## ---------------------------------
+        ## calculate inner product
+        ## ---------------------------------
+        inp_1 = self.calc_inn_pc3d(pc3ds_1["gt"].flat, pc3ds_1["pred"].grid, ell["pred_gt"], nkern_fname)
+        inp_2 = self.calc_inn_pc3d(pc3ds_2["gt"].flat, pc3ds_2["pred"].grid, ell["pred_gt"], None)
+        inp_total = inp_1 + inp_2
+
+        print_text = "1:{:.4f}, 2:{:.4f}, ".format(inp_1.item(), inp_2.item() )
+
+        if all(n > 0 for n in pc3ds_pred_flat_1from2.nb):
+            inp_flow_1 = self.calc_inn_pc3d(pc3ds_1["gt"].flat, pc3ds_pred_grid_1from2, ell["pred_gt"], None) # TODO: specify the nkern_fname here
+            inp_total += inp_flow_1
+
+            print_text = print_text + "1 from 2:{:.4f}, ".format(inp_flow_1.item() )
+        
+            if torch.isnan(inp_flow_1).any():
+                self.debug_flow_dump_pickle(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
+                raise ValueError("NaN encountered in inp_flow_1")
+
+        if all(n > 0 for n in pc3ds_pred_flat_2from1.nb):
+            inp_flow_2 = self.calc_inn_pc3d(pc3ds_2["gt"].flat, pc3ds_pred_grid_2from1, ell["pred_gt"], None) # TODO: specify the nkern_fname here
+            inp_total += inp_flow_2
+
+            print_text = print_text + "2 from 1:{:.4f}, ".format(inp_flow_2.item() )
+
+            if torch.isnan(inp_flow_2).any():
+                self.debug_flow_dump_pickle(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
+                raise ValueError("NaN encountered in inp_flow_2")
+
+        print(print_text)
+
+        if torch.isnan(inp_total).any():
+            self.debug_flow_dump_pickle(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
+            raise ValueError("NaN encountered in inp_1: {} or inp_2: {}".format( inp_1.item(), inp_2.item() ) )
+
+        return inp_total
+
+
+    def forward_with_caminfo(self, rgb, depth, depth_gt, depth_mask, depth_gt_mask, nkern_fname, Ts, cam_info):
+        
+        ## ---------------------------------
+        ## load PCL_C3D objects
+        ## ---------------------------------
+        depth_img_dict = {}
+
+        depth_img_dict["depth"] = depth
+        depth_img_dict["depth_mask"] = depth_mask
+        depth_img_dict["depth_gt"] = depth_gt
+        depth_img_dict["depth_gt_mask"] = depth_gt_mask
+        depth_img_dict["rgb"] = rgb
+
+        self.pc3ds = self.load_pc3d(depth_img_dict, cam_info)
+
+        K_cur, width_cur, height_cur, xy1_grid_cur, uvb_grid_cur = cam_info.unpack()
+        batch_size = rgb.shape[0]
+        #####################################
+        # batch_size = rgb.shape[0]
+        
+        # K_cur, width_cur, height_cur, xy1_grid_cur, uvb_grid_cur = cam_info.unpack()
+
+        # uvb_flat_cur = uvb_grid_cur.reshape(batch_size, 3, -1)
+
+        # self.pc3ds = EasyDict()
+        # self.pc3ds["gt"] = PCL_C3D()
+        # self.pc3ds["pred"] = PCL_C3D()
+
+        # ## rgb to hsv
+        # hsv = rgb_to_hsv(rgb, flat=False)           # B*3*H*W
+        # hsv_flat = hsv.reshape(batch_size, 3, -1)   # B*3*N
+
+        # feat_comm_grid = {'hsv': hsv}
+        # feat_comm_flat = {'hsv': hsv_flat}
+        
+        # ## generate PCL_C3D object
+        # self.pc3ds["gt"] = load_pc3d(self.pc3ds["gt"], depth_gt, depth_gt_mask, xy1_grid_cur, uvb_flat_cur, K_cur, feat_comm_grid, feat_comm_flat, 
+        #                                 sparse=True, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts, return_stat=self.opts.norm_return_stat)
+        # self.pc3ds["pred"] = load_pc3d(self.pc3ds["pred"], depth, depth_mask, xy1_grid_cur, uvb_flat_cur, K_cur, feat_comm_grid, feat_comm_flat, 
+        #                                 sparse=False, use_normal=self.opts.use_normal, dense_nml_op=self.normal_op_dense, return_stat=self.opts.norm_return_stat)
+
+        ## ---------------------------------
+        ## optionally, load PCL_C3D objects after transformation
+        ## ---------------------------------
         self.flag_cross_frame = Ts is not None and self.seq_frame_n > 1 and self.opts.cross_gt_pred_weight > 0
         self.flag_cross_frame_predpred = Ts is not None and self.seq_frame_n > 1 and self.opts.cross_pred_pred_weight > 0
         if self.flag_cross_frame:
@@ -373,32 +835,24 @@ class C3DLoss(nn.Module):
         if self.flag_cross_frame_predpred:
             self.pc3ds["pred_trans_flat"] = transform_pc3d(self.pc3ds["pred"], Ts, self.seq_frame_n, K_cur, batch_size)
         
-        ## random ell
-        ell = {}
-        for key in self.opts.ell_keys:
-            ell[key] = self.opts.ell_min[key] + np.abs(self.opts.ell_rand[key]* np.random.normal()) 
-        
-        if self.flag_cross_frame_predpred:
-            ell_predpred = {}
-            for key in self.opts.ell_keys:
-                ell_predpred[key] = self.opts.ell_min_predpred[key] + np.abs(self.opts.ell_rand_predpred[key]* np.random.normal()) 
+        ## ---------------------------------
+        ## configure length scale of kernels
+        ## ---------------------------------
+        ell = self.gen_rand_ell()
 
+        ## ---------------------------------
         ## calculate inner product
-        inp = self.calc_inn_pc3d(self.pc3ds["gt"].flat, self.pc3ds["pred"].grid, ell, nkern_fname)
+        ## ---------------------------------
+        inp = self.calc_inn_pc3d(self.pc3ds["gt"].flat, self.pc3ds["pred"].grid, ell["pred_gt"], nkern_fname)
         inp_total = inp
 
         if self.flag_cross_frame:
-            inp_cross_frame = self.calc_inn_pc3d(self.pc3ds["gt_trans_flat"], self.pc3ds["pred"].grid, ell, None) # TODO: specify the nkern_fname here
+            inp_cross_frame = self.calc_inn_pc3d(self.pc3ds["gt_trans_flat"], self.pc3ds["pred"].grid, ell["pred_gt"], None) # TODO: specify the nkern_fname here
             inp_total = inp_total + inp_cross_frame * self.opts.cross_gt_pred_weight
-        #     print('used cross gt_pred')
-        # else:
-        #     print('not used cross gt_pred')
+
         if self.flag_cross_frame_predpred:
-            inp_predpred = self.calc_inn_pc3d(self.pc3ds["pred_trans_flat"], self.pc3ds["pred"].grid, ell_predpred, None) # TODO: specify the nkern_fname here
+            inp_predpred = self.calc_inn_pc3d(self.pc3ds["pred_trans_flat"], self.pc3ds["pred"].grid, ell["pred_pred"], None) # TODO: specify the nkern_fname here
             inp_total = inp_total + inp_predpred * self.opts.cross_pred_pred_weight
-        #     print('used cross pred_pred')
-        # else:
-        #     print('not used cross pred_pred')
         
         return inp_total
     

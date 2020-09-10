@@ -322,7 +322,6 @@ class DataReaderKITTI(DataReader):
 
     def inex_from_calib(self, calib, side):
         inex = InExtr()
-        align_corner = False
 
         im_shape = calib["S_rect_{:02d}".format(side)][::-1].astype(np.int32) ## ZMH: [height, width]
 
@@ -333,9 +332,10 @@ class DataReaderKITTI(DataReader):
         P_rect = calib['P_rect_{:02d}'.format(side)].reshape(3, 4).astype(np.float32)
         K = P_rect[:, :3]
         K = K_mat2py(K)
-        K_unit = scale_K(K, old_width=im_shape[1], old_height=im_shape[0], torch_mode=False, align_corner=align_corner)
+        # K_unit = scale_K(K, old_width=im_shape[1], old_height=im_shape[0], torch_mode=False, align_corner=self.align_corner)
 
-        inex.K_unit = K_unit
+        # inex.K_unit = K_unit
+        inex.K = K
 
         ## extrinsics
         T_cam_lidar = np.hstack((calib['R'].reshape(3, 3), calib['T'][..., np.newaxis]))
@@ -395,7 +395,6 @@ class DataReaderWaymo(DataReader):
     def inex_from_calib(self, calib, side):
 
         inex = InExtr()
-        align_corner = False
 
         Tr_velo_to_cam = calib['Tr_velo_to_cam_{}'.format(side)].reshape((4,4)).astype(np.float32)
 
@@ -411,9 +410,10 @@ class DataReaderWaymo(DataReader):
         inex.width = 1920
         inex.height = 1280
 
-        K_unit = scale_K(cam_intr_normal, old_width=inex.width, old_height=inex.height, torch_mode=False, align_corner=align_corner)
+        # K_unit = scale_K(cam_intr_normal, old_width=inex.width, old_height=inex.height, torch_mode=False, align_corner=self.align_corner)
 
-        inex.K_unit = K_unit
+        # inex.K_unit = K_unit
+        inex.K = K
 
         inex.P_cam_li = Tr_velo_to_cam
         inex.dist_coef = dist_coeff
@@ -466,7 +466,6 @@ class DataReaderVKITTI2(DataReader):
     def inex_from_calib(self, calib, cam, fid):
 
         inex = InExtr()
-        align_corner = False
 
         calib_cur = calib[(cam, fid)]
         cam_intr_normal = np.eye(3, dtype=np.float32)
@@ -493,9 +492,10 @@ class DataReaderVKITTI2(DataReader):
         # inex.width = 1920
         # inex.height = 1280
 
-        K_unit = scale_K(cam_intr_normal, old_width=inex.width, old_height=inex.height, torch_mode=False, align_corner=align_corner)
+        # K_unit = scale_K(cam_intr_normal, old_width=inex.width, old_height=inex.height, torch_mode=False, align_corner=self.align_corner)
 
-        inex.K_unit = K_unit
+        # inex.K_unit = K_unit
+        inex.K = K
 
         inex.P_cam_li = np.eye(3,4)
         inex.dist_coef = np.zeros(5)

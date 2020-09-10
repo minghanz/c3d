@@ -9,12 +9,80 @@ from .dataset_kitti import *
 from .cam import *
 from ..utils_general.calib import *
 
+from ..utils_general.timing import Timing
+
+def CamInfo_from_InExs(inex_list):
+    """construct cam_info from an InExtr object or a list of them. 
+    InExtr is in numpy. CamInfo is in pytorch. """
+
+    ### if input is a single InExtr, construct the list
+    if isinstance(inex_list, InExtr):
+        inex_list = [inex_list]
+
+    ### make sure all InExtr are compatible to batch
+    width0 = inex_list[0].width
+    height0 = inex_list[0].height
+    assert all(x.width == width0 for x in inex_list)
+    assert all(x.height == height0 for x in inex_list)
+
+    ### concatenate and batch
+    K_list = [inex.K for inex in inex_list]
+    P_cam_li_list = [inex.P_cam_li for inex in inex_list]
+
+    K_batched = np.stack(K_list, axis=0)
+    if any(P_cam_li is None for P_cam_li in P_cam_li_list): 
+        P_cam_li_batched = None
+    elif all(P_cam_li is not None for P_cam_li in P_cam_li_list):
+        P_cam_li_batched = np.stack(P_cam_li_list, axis=0)
+    else:
+        raise ValueError("A subset of P_cam_li_list is None, need further processing. ")
+
+    ### np.ndarray to torch.Tensor
+    K_batched = torch.from_numpy(K_batched)
+    P_cam_li_batched = torch.from_numpy(P_cam_li_batched) if P_cam_li_batched is not None else None
+    
+    ### construct CamInfo from batched input
+    cam_info = CamInfo_from_K_batched(width0, height0, K_batched, P_cam_li_batched)
+    return cam_info
+
+
+def CamInfo_from_K_batched(width, height, K_batched, P_cam_li_batched=None):
+    """ This function needs torch.Tensor input. 
+    set_from_intr() assumes a single intr duplicated to the whole batch, while set_from_K_batched() assumes input of a batch of K which could be different. 
+    However, the width and height of images should be the same, otherwise uvb_grid and xy1_grid cannot be batched. 
+    """
+
+    to_torch = True
+    batch_size = K_batched.shape[0]
+    device=K_batched.device
+    dtype = K_batched.dtype
+
+    uv_grid = gen_uv_grid(width, height, to_torch) # 2*H*W
+    uv_grid = uv_grid.to(device=device)
+    uv_grid_batched = uv_grid.unsqueeze(0).repeat(batch_size, 1, 1, 1) # B*2*H*W
+
+    inv_K_batched = torch.inverse(K_batched)
+
+    uv1_flat, xy1_flat = xy1_from_uv(uv_grid_batched, inv_K_batched, to_torch)  # 3*N
+
+    uv1_grid = uv1_flat.reshape(batch_size, 3, uv_grid.shape[1], uv_grid.shape[2] ) # B*3*H*W
+    xy1_grid = xy1_flat.reshape(batch_size, 3, uv_grid.shape[1], uv_grid.shape[2] ) # B*3*H*W
+    for ib in range(batch_size):
+        uv1_grid[ib, 2, :, :] = ib
+    
+    if P_cam_li_batched is None:
+        P_cam_li_batched = torch.eye(4).to(device=device, dtype=dtype)
+        P_cam_li_batched.unsqueeze(0).repeat(batch_size, 1, 1)
+    
+    cam_info = CamInfo(K=K_batched, width=width, height=height, xy1_grid=xy1_grid, uvb_grid=uv1_grid, P_cam_li=P_cam_li_batched)
+    return cam_info
+
 class CamInfo(nn.Module):
 
     def __init__(self, K=None, width=None, height=None, xy1_grid=None, uvb_grid=None, P_cam_li=None, in_extr=None, batch_size=None, align_corner=False):
         super(CamInfo, self).__init__()
         '''Valid inputs:
-        1. in_extr, batch_size, (optional: align_corner)
+        1. in_extr, batch_size, (optional: align_corner)  #09102020: This is now deprecated. The in_extr accepted here is now InExtrKunit object. Use CamInfo_from_InExs to initialize a CamInfo from the new InExtr. 
         2. K, width, height, xy1_grid, uvb_grid
         '''
         if in_extr is not None:
@@ -27,10 +95,10 @@ class CamInfo(nn.Module):
             self.height = int(height)
             self.batch_size = xy1_grid.shape[0]
 
-        self.register_buffer('K', K)
-        self.register_buffer('uvb_grid', uvb_grid)
-        self.register_buffer('xy1_grid', xy1_grid)
-        self.register_buffer('P_cam_li', P_cam_li)      # only P_cam_li is not batched
+        self.register_buffer('K', K.to(dtype=torch.float32))
+        self.register_buffer('uvb_grid', uvb_grid.to(dtype=torch.float32))
+        self.register_buffer('xy1_grid', xy1_grid.to(dtype=torch.float32))
+        self.register_buffer('P_cam_li', P_cam_li.to(dtype=torch.float32))      # only P_cam_li is not batched
 
     def unpack(self):
         return self.K, self.width, self.height, self.xy1_grid, self.uvb_grid
@@ -63,6 +131,9 @@ class CamInfo(nn.Module):
 
         new_cam_info = CamInfo(K_scaled, new_width, new_height, xy1_grid, uvb_grid_scaled, self.P_cam_li)
         return new_cam_info
+
+    def size(self):
+        return self.uvb_grid.size()
 
     def crop(self, xy_crop):
         '''
@@ -107,6 +178,20 @@ class CamInfo(nn.Module):
         
         cam_info = CamInfo(K_crop, x_size, y_size, xy1_grid_crop, uvb_grid_crop, self.P_cam_li)
         return cam_info
+
+    def lidar_to_depth(self, lidar_pts):
+        batch_size = self.K.shape[0]
+        if lidar_pts.ndim == 2:
+            lidar_pts = lidar_pts.unsqueeze(0)
+        assert lidar_pts.shape[0] == batch_size, "{}, {}".format(lidar_pts.shape, self.K.shape)
+
+        dep_img_list = []
+        for ib in range(batch_size):
+            dep_img = lidar_to_depth(lidar_pts[ib], self.P_cam_li[ib], K_unit=None, K_ready=self.K[ib], im_shape=(self.height, self.width), torch_mode=True)    #H*W
+            dep_img_list.append(dep_img)
+        dep_img_batch = torch.stack(dep_img_list, dim=0)    # B*H*W
+        
+        return dep_img_batch
 
 def seq_ops_on_cam_info(cam_info, cam_ops_list):
     for cam_op in cam_ops_list:

@@ -13,7 +13,7 @@ class TimingSingerLayer:
         self.cur_name = name
         self.cur_time = time.time() if cur_time is None else cur_time
         if last_time is not None:
-            print('{}: {} -> {}: {:.5}'.format(self.layer, last_name, self.cur_name, self.cur_time - last_time))
+            print(' '*int(self.layer)*2 + '{}: {} -> {}: {:.5}'.format(self.layer, last_name, self.cur_name, self.cur_time - last_time))
         else: 
             print('Initialized:', self.cur_name)
 
@@ -22,13 +22,16 @@ class Timing:
         self.timelist = []
         self.timetemp = {}
 
-    def log(self, name, layer):
+    def log(self, name, layer, cuda_sync=False):
+        if cuda_sync:
+            torch.cuda.synchronize()
+
         init_stage = len(self.timelist) == 0
 
         while layer >= len(self.timelist):
             self.timelist.append( TimingSingerLayer(len(self.timelist)) )
             if len(self.timelist) == 1:
-                self.timelist[len(self.timelist)-1].log(name)
+                self.timelist[len(self.timelist)-1].log(name, cuda_sync)
             else:
                 self.timelist[len(self.timelist)-1].log(self.timelist[len(self.timelist)-2].cur_name, self.timelist[len(self.timelist)-2].cur_time)
 
@@ -37,10 +40,16 @@ class Timing:
             for cl in range(len(self.timelist)-1, layer-1, -1):
                 self.timelist[cl].log(name, cur_time)
 
-    def log_temp(self, name):
+    def log_temp(self, name, cuda_sync=False):
+        if cuda_sync:
+            torch.cuda.synchronize()
+
         self.timetemp[name] = time.time()
-    def log_temp_end(self, name):
+    def log_temp_end(self, name, cuda_sync=False):
         assert name in self.timetemp
+        if cuda_sync:
+            torch.cuda.synchronize()
+
         print('{}: {:.5f}'.format(name, time.time() - self.timetemp[name]))
         del self.timetemp[name]
 

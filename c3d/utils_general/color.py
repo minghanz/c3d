@@ -158,15 +158,19 @@ def rgbmap(gray, mask_zeros=False, max_val=-1, min_val=0):
     if mask_zeros:
         valid_mask = gray>0
         invalid_mask = np.invert(valid_mask)
-        min_cur = gray[valid_mask].min()
-        max_cur = gray[valid_mask].max()
+        if len(gray[valid_mask]) > 0:
+            min_cur = gray[valid_mask].min()
+            max_cur = gray[valid_mask].max()
+        else:
+            min_cur = 0
+            max_cur = 0
     else:
         min_cur = gray.min()
         max_cur = gray.max()
     
     if max_val == -1:
         ## mode 1: normalize to fulfill the range, excluding points of zero value (deal with them outside of this function)
-        gray = (gray.astype(float) - min_cur )/( max_cur - min_cur )  # normalize to fulfill the range
+        gray = (gray.astype(float) - min_cur )/( max_cur - min_cur + 1e-5)  # normalize to fulfill the range
     else:
         ## mode 2: normalize with fixed ratio
         gray = (gray.astype(float) - min_val )/( max_val - min_val )
