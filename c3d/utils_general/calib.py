@@ -225,7 +225,8 @@ def sub2ind(matrixSize, rowSub, colSub):
     """Convert row, col matrix subscripts to linear indices
     """
     m, n = matrixSize
-    return rowSub * (n-1) + colSub - 1
+    # return rowSub * (n-1) + colSub - 1    ### 09122020: this is wrong?
+    return rowSub * n + colSub
 
 '''from bts/bts_pre_intr.py'''
 def lidar_to_depth(velo, extr_cam_li, K_unit, im_shape, K_ready=None, torch_mode=False, align_corner=False, dep_dim_pre_proj=2, timer=None):

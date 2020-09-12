@@ -22,6 +22,8 @@ from .utils_general.vis import overlay_dep_on_rgb, dep_img_bw
 
 from .utils_general.pcl_funcs import pcl_from_flat_xyz, pcl_from_grid_xy1_dep, pcl_write
 
+from .utils_general.timing import Timing
+
 import torchsnooper
 import pickle
 
@@ -297,12 +299,15 @@ def sub2ind(matrixSize, batchSub, rowSub, colSub):
     """Convert row, col matrix subscripts to linear indices
     """
     b, h, w = matrixSize
-    return batchSub * (h*w) + rowSub * (w-1) + colSub
+    return batchSub * (h*w) + rowSub * w + colSub
 
-def flow_pc3d(pcl_c3d, flow_grid, flow_mask_grid, K_cur, feat_comm_keys, use_normal, sparse_nml_opts=None, return_stat=False):
+def flow_pc3d(pcl_c3d, flow_grid, flow_mask_grid, K_cur, feat_comm_keys, use_normal, sparse_nml_opts=None, return_stat=False, timer=None):
     """
     This function construct PCL_C3D_Flat objects which is transformed by the 3D scene flow.
     """
+    if timer is not None:
+        timer.log("flow_pc3d start", 1, True)
+
     batch_size = flow_grid.shape[0]
 
     ### compose the flow to xyz
@@ -313,6 +318,7 @@ def flow_pc3d(pcl_c3d, flow_grid, flow_mask_grid, K_cur, feat_comm_keys, use_nor
 
     ### mask out invalid pixels and project to image uv coordinate
     xyz_mask_grid = pcl_c3d.grid.mask
+    # if False:
     if flow_mask_grid is not None:
         mask_grid = xyz_mask_grid & flow_mask_grid
     else:
@@ -325,6 +331,8 @@ def flow_pc3d(pcl_c3d, flow_grid, flow_mask_grid, K_cur, feat_comm_keys, use_nor
     inview_mask_list = [None]*batch_size
     
     for ib in range(batch_size):
+        if timer is not None:
+            timer.log("uvb, inview_mask ib=%d"%ib, 2, True)
         mask_vec = mask_flat[ib, 0]
         xyz_flowed_flat_cur = xyz_flowed_flat[[ib]][:,:,mask_vec]  # 1*3*N
 
@@ -344,31 +352,43 @@ def flow_pc3d(pcl_c3d, flow_grid, flow_mask_grid, K_cur, feat_comm_keys, use_nor
 
         new_nb[ib] = uvb.shape[2]
     
+    # print("new_nb:", new_nb)
+    if timer is not None:
+        timer.log("cat xyz, uvb", 1, True)
+
     xyz_flowed_flat = torch.cat(xyz_flowed_flat_list, dim=2)
     uvb_flat = torch.cat(uvb_list, dim=2)
 
-    ### find the duplicate points and filter out those not close to the camera
-    occlu_mask = torch.ones(uvb_flat.shape[2], dtype=torch.bool, device=mask_grid.device)
+    ### The occlusion check is the speed bottleneck (>0.4s), and the effect is similar to flow_mask_grid, therefore disabled
+    # if timer is not None:
+    #     timer.log("occlu_mask", 1, True)
+    # ### find the duplicate points and filter out those not close to the camera
+    # occlu_mask = torch.ones(uvb_flat.shape[2], dtype=torch.bool, device=mask_grid.device)
 
-    uvb_dim = [xyz_grid.shape[0], xyz_grid.shape[2], xyz_grid.shape[3]]
-    velo_proj_lin = sub2ind(uvb_dim, uvb_flat[0, 2, :], uvb_flat[0, 1, :], uvb_flat[0, 0, :] )  # B, H, W
-    dupe_proj_lin = [item for item, count in Counter(velo_proj_lin).items() if count > 1]
-    for dd in dupe_proj_lin:
-        pts = torch.where(velo_proj_lin == dd)[0] ### torch.where() [actually torch.nonzero(condition, as_tuple=True)] returns a tuple. [0] takes the array of the first dim.
-        z_min = 1e7
-        for pt_idx in pts:
-            z_cur = xyz_flowed_flat[0, 2, pt_idx]
-            if z_cur < z_min:
-                z_min = z_cur
-                min_idx = pt_idx
-            else:
-                occlu_mask[pts] = False
-                ib = uvb_flat[0, 2, pt_idx]
-                new_nb[ib] -= 1
+    # uvb_dim = [xyz_grid.shape[0], xyz_grid.shape[2], xyz_grid.shape[3]]
+    # velo_proj_lin = sub2ind(uvb_dim, uvb_flat[0, 2, :], uvb_flat[0, 1, :], uvb_flat[0, 0, :] )  # B, H, W
+    # dupe_proj_lin = [item for item, count in Counter(velo_proj_lin).items() if count > 1]
+    # # print("# or dupe_proj_lin:", len(dupe_proj_lin))
+    # for dd in dupe_proj_lin:
+    #     pts = torch.where(velo_proj_lin == dd)[0] ### torch.where() [actually torch.nonzero(condition, as_tuple=True)] returns a tuple. [0] takes the array of the first dim.
+    #     z_min = 1e7
+    #     for pt_idx in pts:
+    #         z_cur = xyz_flowed_flat[0, 2, pt_idx]
+    #         if z_cur < z_min:
+    #             z_min = z_cur
+    #             min_idx = pt_idx
+    #         else:
+    #             occlu_mask[pts] = False
+    #             ib = uvb_flat[0, 2, pt_idx]
+    #             new_nb[ib] -= 1
     
-    xyz_flowed_flat = xyz_flowed_flat[:,:,occlu_mask]
-    uvb_flat = uvb_flat[:,:,occlu_mask]
+    # # print("before occlu_mask:", xyz_flowed_flat.shape[2])
+    # xyz_flowed_flat = xyz_flowed_flat[:,:,occlu_mask]
+    # uvb_flat = uvb_flat[:,:,occlu_mask]
+    # # print("after occlu_mask:", xyz_flowed_flat.shape[2])
 
+    if timer is not None:
+        timer.log("PCL_C3D_Flat", 1, True)
     ### construct PCL_C3D_Flat
     flow_pcl_c3d_flat = PCL_C3D_Flat()
     flow_pcl_c3d_flat.uvb = uvb_flat
@@ -380,6 +400,8 @@ def flow_pc3d(pcl_c3d, flow_grid, flow_mask_grid, K_cur, feat_comm_keys, use_nor
         return flow_pcl_c3d_flat, None
     #     raise ValueError("empty pcl: {}".format(new_nb))
 
+    if timer is not None:
+        timer.log("feat_flat", 1, True)
     ### copy those shared features from original point cloud. Remember to apply the same masking.
     for feat in feat_comm_keys:
         feat_flat = pcl_c3d.grid.feature[feat].reshape(batch_size, 3, -1)
@@ -393,13 +415,18 @@ def flow_pc3d(pcl_c3d, flow_grid, flow_mask_grid, K_cur, feat_comm_keys, use_nor
 
         feat_flat_concat = torch.cat(feat_flat_list, dim=2)
         ### filter out points duplicated on image
-        flow_pcl_c3d_flat.feature[feat] = feat_flat_concat[:,:,occlu_mask]
+        # flow_pcl_c3d_flat.feature[feat] = feat_flat_concat[:,:,occlu_mask]
+        flow_pcl_c3d_flat.feature[feat] = feat_flat_concat
 
+    if timer is not None:
+        timer.log("feat_grid", 1, True)
     ### prepare xyz_grid of the flowed point cloud
     uvb_split = uvb_flat.to(dtype=torch.long).squeeze(0).transpose(0,1).split(1,dim=1) # a tuple of 3 elements of tensor N*1, only long/byte/bool tensors can be used as indices
     xyz_flowed_grid = grid_from_concat_flat_func(uvb_split, xyz_flowed_flat, xyz_grid.shape)
     mask_flowed_grid = (xyz_flowed_grid != 0).any(1, keepdim=True)
 
+    if timer is not None:
+        timer.log("calc_normal", 1, True)
     ### calculate sparse normal
     if use_normal:
         if return_stat:
@@ -413,6 +440,8 @@ def flow_pc3d(pcl_c3d, flow_grid, flow_mask_grid, K_cur, feat_comm_keys, use_nor
         if return_stat:
             flow_pcl_c3d_flat.feature['dist_stat'] = dist_stat_flat
 
+    if timer is not None:
+        timer.log("PCL_C3D_Grid", 1, True)
     ### construct PCL_C3D_Grid
     flow_pcl_c3d_grid = PCL_C3D_Grid()
     flow_pcl_c3d_grid.mask = mask_flowed_grid
@@ -443,6 +472,8 @@ class C3DLoss(nn.Module):
         self.normal_op_dense = NormalFromDepthDense()
 
         self.internal_count = 0     ### the internal count is to differentiate different forward passes when we debug the input and write them to files. 
+
+        # self.timer = Timing()
 
     def parse_opts(self, inputs=None, f_input=None):
         # parser = argparse.ArgumentParser(description='Options for continuous 3D loss')
@@ -724,28 +755,35 @@ class C3DLoss(nn.Module):
             self.debug_flow_input_to_imgs(depth_img_dict_1, depth_img_dict_2)
             self.debug_flow_input_to_pcds_raw(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
             self.debug_flow_dump_pickle(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
+        
+        # self.timer.log("load_pc3d", 0, True)
         ## ---------------------------------
         ## unpack the depth info
         ## ---------------------------------
         pc3ds_1 = self.load_pc3d(depth_img_dict_1, cam_info)
         pc3ds_2 = self.load_pc3d(depth_img_dict_2, cam_info)
 
+        # self.timer.log("flow_pc3d 1", 0, True)
         ## ---------------------------------
         ## optionally, load PCL_C3D objects after scene flow propagation
         ## ---------------------------------
         K_cur, width_cur, height_cur, xy1_grid_cur, uvb_grid_cur = cam_info.unpack()
 
         pc3ds_pred_flat_2from1, pc3ds_pred_grid_2from1 = flow_pc3d(pc3ds_1["pred"], flow_dict_1to2["pred"], flow_dict_1to2["mask"], K_cur, 
-                                        self.feat_comm, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts, return_stat=self.opts.norm_return_stat)
+                                        self.feat_comm, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts, return_stat=self.opts.norm_return_stat)#, timer=self.timer)
         
+        # self.timer.log("flow_pc3d 2", 0, True)
+
         pc3ds_pred_flat_1from2, pc3ds_pred_grid_1from2 = flow_pc3d(pc3ds_2["pred"], flow_dict_2to1["pred"], flow_dict_2to1["mask"], K_cur, 
-                                        self.feat_comm, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts, return_stat=self.opts.norm_return_stat)
+                                        self.feat_comm, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts, return_stat=self.opts.norm_return_stat)#, timer=self.timer)
         
+        # self.timer.log("gen_rand_ell", 0, True)
         ## ---------------------------------
         ## configure length scale of kernels
         ## ---------------------------------
         ell = self.gen_rand_ell()
 
+        # self.timer.log("calc_inn_pc3d", 0, True)
         ## ---------------------------------
         ## calculate inner product
         ## ---------------------------------
@@ -753,34 +791,39 @@ class C3DLoss(nn.Module):
         inp_2 = self.calc_inn_pc3d(pc3ds_2["gt"].flat, pc3ds_2["pred"].grid, ell["pred_gt"], None)
         inp_total = inp_1 + inp_2
 
-        print_text = "1:{:.4f}, 2:{:.4f}, ".format(inp_1.item(), inp_2.item() )
+        # print_text = "1:{:.4f}, 2:{:.4f}, ".format(inp_1.item(), inp_2.item() )
 
         if all(n > 0 for n in pc3ds_pred_flat_1from2.nb):
+            # self.timer.log("calc_inn_pc3d flow 1", 0, True)
+
             inp_flow_1 = self.calc_inn_pc3d(pc3ds_1["gt"].flat, pc3ds_pred_grid_1from2, ell["pred_gt"], None) # TODO: specify the nkern_fname here
             inp_total += inp_flow_1
 
-            print_text = print_text + "1 from 2:{:.4f}, ".format(inp_flow_1.item() )
+            # print_text = print_text + "1 from 2:{:.4f}, ".format(inp_flow_1.item() )
         
             if torch.isnan(inp_flow_1).any():
                 self.debug_flow_dump_pickle(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
                 raise ValueError("NaN encountered in inp_flow_1")
 
         if all(n > 0 for n in pc3ds_pred_flat_2from1.nb):
+            # self.timer.log("calc_inn_pc3d flow 2", 0, True)
+
             inp_flow_2 = self.calc_inn_pc3d(pc3ds_2["gt"].flat, pc3ds_pred_grid_2from1, ell["pred_gt"], None) # TODO: specify the nkern_fname here
             inp_total += inp_flow_2
 
-            print_text = print_text + "2 from 1:{:.4f}, ".format(inp_flow_2.item() )
+            # print_text = print_text + "2 from 1:{:.4f}, ".format(inp_flow_2.item() )
 
             if torch.isnan(inp_flow_2).any():
                 self.debug_flow_dump_pickle(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
                 raise ValueError("NaN encountered in inp_flow_2")
 
-        print(print_text)
+        # print(print_text)
 
         if torch.isnan(inp_total).any():
             self.debug_flow_dump_pickle(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
             raise ValueError("NaN encountered in inp_1: {} or inp_2: {}".format( inp_1.item(), inp_2.item() ) )
 
+        # self.timer.log("return inp_total", 0, True)
         return inp_total
 
 
