@@ -33,45 +33,45 @@ class PCL_C3D_Flat:
         self.nb = []
         self.feature = EasyDict()
 
-    # def to_pcd(self):
-    #     xyz = self.feature.xyz
-    #     rgb = hsv_to_rgb(self.feature.hsv, flat=True)
-    #     uvb = self.uvb  # 1*3*N
-    #     batch_size = len(self.nb)
-    #     clouds = []
-    #     for ib in range(batch_size):
-    #         ib_mask = uvb[0,2] == ib
-    #         xyz_i = xyz[0,:,ib_mask]
-    #         rgb_i = rgb[0,:,ib_mask]
+    def to_pcd(self):
+        xyz = self.feature.xyz
+        rgb = hsv_to_rgb(self.feature.hsv, flat=True)
+        uvb = self.uvb  # 1*3*N
+        batch_size = len(self.nb)
+        clouds = []
+        for ib in range(batch_size):
+            ib_mask = uvb[0,2] == ib
+            xyz_i = xyz[0,:,ib_mask]
+            rgb_i = rgb[0,:,ib_mask]
 
-    #         cloud_i = pcl_from_flat_xyz(xyz_i, rgb_i)
-    #         clouds.append(cloud_i)
+            cloud_i = pcl_from_flat_xyz(xyz_i, rgb_i)
+            clouds.append(cloud_i)
 
-    #     return clouds
+        return clouds
 
 class PCL_C3D_Grid:
     def __init__(self):
         self.mask = None
         self.feature = EasyDict()
 
-    # def to_pcd(self):
-    #     xyz = self.feature.xyz
-    #     rgb = hsv_to_rgb(self.feature.hsv)
-    #     xyz = xyz.permute(0,2,3,1)
-    #     rgb = rgb.permute(0,2,3,1)  # B*H*W*C
-    #     mask = self.mask
+    def to_pcd(self):
+        xyz = self.feature.xyz
+        rgb = hsv_to_rgb(self.feature.hsv)
+        xyz = xyz.permute(0,2,3,1)
+        rgb = rgb.permute(0,2,3,1)  # B*H*W*C
+        mask = self.mask
 
-    #     batch_size = xyz.shape[0]
-    #     clouds = []
-    #     for ib in range(batch_size):
-    #         mask_i = mask[ib,0]
-    #         xyz_i = xyz[ib][mask_i]
-    #         rgb_i = rgb[ib][mask_i]
+        batch_size = xyz.shape[0]
+        clouds = []
+        for ib in range(batch_size):
+            mask_i = mask[ib,0]
+            xyz_i = xyz[ib][mask_i]
+            rgb_i = rgb[ib][mask_i]
 
-    #         cloud_i = pcl_from_flat_xyz(xyz_i.transpose(0,1), rgb_i.transpose(0,1))
-    #         clouds.append(cloud_i)
+            cloud_i = pcl_from_flat_xyz(xyz_i.transpose(0,1), rgb_i.transpose(0,1))
+            clouds.append(cloud_i)
 
-    #     return clouds
+        return clouds
 
 
 class PCL_C3D:
@@ -714,7 +714,7 @@ class C3DLoss(nn.Module):
         return clouds
 
     def debug_flow_input_to_pcds_raw(self, depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info):
-
+        """This is to generate pcd files from input depth and flow"""
         ### load four point clouds predictions and two ground truths to pcd file
         clouds_pred_1, clouds_gt_1 = self.debug_flow_dep_to_pcd(depth_img_dict_1, cam_info)
         clouds_pred_2, clouds_gt_2 = self.debug_flow_dep_to_pcd(depth_img_dict_2, cam_info)
@@ -736,6 +736,51 @@ class C3DLoss(nn.Module):
 
         return
 
+    def debug_flow_input_to_pcds_pcl_c3d(self, pcl_c3d_1, pcl_c3d_2, pcl_c3d_gt_1, pcl_c3d_gt_2, pcl_c3d_1_from_2, pcl_c3d_2_from_1):
+        """This is to generate pcd files from PCL_C3D_Grid or PCL_C3D_Flat"""
+        
+        flats = {}
+        flats["1"] = pcl_c3d_1.flat.to_pcd()
+        flats["2"] = pcl_c3d_2.flat.to_pcd()
+        flats["gt_1"] = pcl_c3d_gt_1.flat.to_pcd()
+        flats["gt_2"] = pcl_c3d_gt_2.flat.to_pcd()
+        flats["1_from_2"] = pcl_c3d_1_from_2.flat.to_pcd()
+        flats["2_from_1"] = pcl_c3d_2_from_1.flat.to_pcd()
+
+        grids = {}
+        grids["1"] = pcl_c3d_1.grid.to_pcd()
+        grids["2"] = pcl_c3d_2.grid.to_pcd()
+        grids["gt_1"] = pcl_c3d_gt_1.grid.to_pcd()
+        grids["gt_2"] = pcl_c3d_gt_2.grid.to_pcd()
+        grids["1_from_2"] = pcl_c3d_1_from_2.grid.to_pcd()
+        grids["2_from_1"] = pcl_c3d_2_from_1.grid.to_pcd()
+
+        batch_size = len(flats["1"])
+        for key in flats:
+            assert len(flats[key]) == batch_size
+        for key in grids:
+            assert len(grids[key]) == batch_size
+
+        path = self.opts.debug_path
+        name = "n{:04d}_b{}_s{}_{}"
+        for ib in range(batch_size):
+            pcl_write(flats["1"][ib], os.path.join(path, name.format(self.internal_count, ib, 0, "pred_flat") ) )
+            pcl_write(flats["2"][ib], os.path.join(path, name.format(self.internal_count, ib, 1, "pred_flat") ) )
+            pcl_write(flats["gt_1"][ib], os.path.join(path, name.format(self.internal_count, ib, 0, "gt_flat") ) )
+            pcl_write(flats["gt_2"][ib], os.path.join(path, name.format(self.internal_count, ib, 1, "gt_flat") ) )
+            pcl_write(flats["1_from_2"][ib], os.path.join(path, name.format(self.internal_count, ib, 0, "flowed_flat") ) )
+            pcl_write(flats["2_from_1"][ib], os.path.join(path, name.format(self.internal_count, ib, 1, "flowed_flat") ) )
+
+            pcl_write(grids["1"][ib], os.path.join(path, name.format(self.internal_count, ib, 0, "pred_grid") ) )
+            pcl_write(grids["2"][ib], os.path.join(path, name.format(self.internal_count, ib, 1, "pred_grid") ) )
+            pcl_write(grids["gt_1"][ib], os.path.join(path, name.format(self.internal_count, ib, 0, "gt_grid") ) )
+            pcl_write(grids["gt_2"][ib], os.path.join(path, name.format(self.internal_count, ib, 1, "gt_grid") ) )
+            pcl_write(grids["1_from_2"][ib], os.path.join(path, name.format(self.internal_count, ib, 0, "flowed_grid") ) )
+            pcl_write(grids["2_from_1"][ib], os.path.join(path, name.format(self.internal_count, ib, 1, "flowed_grid") ) )
+
+        return 
+
+
     def debug_flow_inspect_input(self, pickle_path):
         """This is to """
         ### unpickle
@@ -745,12 +790,12 @@ class C3DLoss(nn.Module):
         self.debug_flow_input_to_pcds_raw(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
 
         ### calculate the inner product
-        inp_total = self.forward_with_flow(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
+        inp_total = self.forward_with_flow(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname=None, debug_save_pcd=True)
 
         return inp_total
 
     # @torchsnooper.snoop()
-    def forward_with_flow(self, depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname):
+    def forward_with_flow(self, depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname, debug_save_pcd=False):
         if self.opts.debug_input:
             self.debug_flow_input_to_imgs(depth_img_dict_1, depth_img_dict_2)
             self.debug_flow_input_to_pcds_raw(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
@@ -778,6 +823,18 @@ class C3DLoss(nn.Module):
                                         self.feat_comm, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts, return_stat=self.opts.norm_return_stat)#, timer=self.timer)
         
         # self.timer.log("gen_rand_ell", 0, True)
+        ## ---------------------------------
+        ## optional: save the pcl_c3d objects to file and generate pcd files from them
+        ## ---------------------------------
+        if self.opts.debug_input or debug_save_pcd:
+            pc3ds_1_from_2 = PCL_C3D()
+            pc3ds_1_from_2.flat = pc3ds_pred_flat_1from2
+            pc3ds_1_from_2.grid = pc3ds_pred_grid_1from2
+            pc3ds_2_from_1 = PCL_C3D()
+            pc3ds_2_from_1.flat = pc3ds_pred_flat_2from1
+            pc3ds_2_from_1.grid = pc3ds_pred_grid_2from1
+            self.debug_flow_input_to_pcds_pcl_c3d(pc3ds_1["pred"], pc3ds_2["pred"], pc3ds_1["gt"], pc3ds_2["gt"], pc3ds_1_from_2, pc3ds_2_from_1)
+
         ## ---------------------------------
         ## configure length scale of kernels
         ## ---------------------------------
