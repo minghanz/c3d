@@ -27,6 +27,7 @@ from .utils_general.timing import Timing
 import torchsnooper
 import pickle
 
+# import logging
 class PCL_C3D_Flat:
     def __init__(self):
         self.uvb = None
@@ -337,20 +338,24 @@ def flow_pc3d(pcl_c3d, flow_grid, flow_mask_grid, K_cur, feat_comm_keys, use_nor
         xyz_flowed_flat_cur = xyz_flowed_flat[[ib]][:,:,mask_vec]  # 1*3*N
 
         uvb = torch.matmul(K_cur[ib], xyz_flowed_flat_cur) # 1*3*N
-        uvb = (uvb / uvb[:, [2]]).round() #- 1 , commented because in dataset_read.py there is a K_mat2py() function converting K from matlab to python coordinate
-        uvb[:, 2] = ib
-        uvb_list[ib] = uvb
+        uvb_1 = ( uvb / torch.clamp(torch.abs(uvb[:, [2]]), min=1e-6) ).round() #- 1 , commented because in dataset_read.py there is a K_mat2py() function converting K from matlab to python coordinate
+        uvb_1[:, 2] = ib
+        # uvb_list[ib] = uvb
 
+        # assert (uvb[:,2] == xyz_flowed_flat_cur[:,2]).all(), "{} {}".format(uvb[0,2,0], xyz_flowed_flat_cur[0,2,0])
+        # logging.info( "{} {}".format(uvb[0,2,0], xyz_flowed_flat_cur[0,2,0]) )
         ### check whether the new points are in the view of camera
-        inview_mask = (uvb[0,0,:] > 0) & (uvb[0,0,:] < mask_grid.shape[3]) & (uvb[0,1,:] > 0) & (uvb[0,1,:] < mask_grid.shape[2]) & (xyz_flowed_flat_cur[0,2,:] > 0)
+        inview_mask = (uvb_1[0,0,:] > 0) & (uvb_1[0,0,:] < mask_grid.shape[3]) & (uvb_1[0,1,:] > 0) & (uvb_1[0,1,:] < mask_grid.shape[2]) & (xyz_flowed_flat_cur[0,2,:] > 0.1)
         inview_mask_list[ib] = inview_mask
 
         xyz_flowed_flat_cur = xyz_flowed_flat_cur[:,:,inview_mask]
-        uvb = uvb[:,:,inview_mask]
+        uvb_1 = uvb_1[:,:,inview_mask]
+        # logging.info("diff between uvb2: {}, {}, {}".format((uvb_1-uvb_2).max(), (uvb_1-uvb_2).min(), (uvb_1[:,:2]-uvb_2[:,:2]).mean()) )
+        # logging.info("uvb_1.shape: {} {}".format(uvb_1.shape, uvb.shape))
         xyz_flowed_flat_list[ib] = xyz_flowed_flat_cur
-        uvb_list[ib] = uvb
+        uvb_list[ib] = uvb_1
 
-        new_nb[ib] = uvb.shape[2]
+        new_nb[ib] = uvb_1.shape[2]
     
     # print("new_nb:", new_nb)
     if timer is not None:
