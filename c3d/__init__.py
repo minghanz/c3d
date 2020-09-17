@@ -5,4 +5,5 @@ from .utils import *
 
 from .c3d_loss import C3DLoss
 from .pho_loss import PhoLoss
+from .dep_loss import DepthL1Loss
 from .c3d_loader import C3DLoader
