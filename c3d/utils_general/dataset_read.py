@@ -50,7 +50,7 @@ class DataReader:
         assert ftype in self.ffinder.preload_ftypes
 
         data_dict = {}
-        for fname_key, fnames in self.ffinder.fnames_preload[ftype].items():
+        for fname_ntp, fnames in self.ffinder.fnames_preload[ftype].items():
             self.read_preset(fnames, ftype, data_dict)
 
         return data_dict
@@ -103,10 +103,14 @@ class DataReader:
         """Read a file of ftypes from preset_ftypes. 
         kwargs could specify which part of data in the file is wanted, otherwise all is returned in a dict if there are multiple items in the file.
         If data_dict is given, it is updated with the read data, otherwise the read data is returned. 
+
+        In most cases fname is a single path. 
+        For calib, there could be more than one calib file (e.g. in KITTI, calib_velo_to_cam.txt, calib_cam_to_cam.txt, etc. ) composing the overall calib information. 
+        In this case fnames is a list and contents of the files contribute to a common dict. 
         """
         assert ftype in self.ffinder.preset_ftypes
 
-        ### read the file of ftypes from preset_ftypes
+        ### read the file of ftypes from preset_ftypes and retrieve the contents
         preset = self.preset_func(fnames, ftype)
 
         ### get the ntp corresponding to this file. It may need to append some field later, if the file contains multiple items.
@@ -121,7 +125,7 @@ class DataReader:
         return_single = exist_single or query_single                                         ### otherwise more than one items will be returned
 
         if return_single:
-            ### add a single item to the dict or return a single InExtr object
+            ### retrieve a single InExtr object from the read contents. optionally save it as an item to the dict
             if exist_single:
                 ### no need to augment
                 data_cur = self.one_from_preset(preset, ftype)
@@ -312,6 +316,8 @@ class DataReaderKITTI(DataReader):
         return T
 
     def load_calib(self, fnames):
+        """For calib, there could be more than one calib file (e.g. in KITTI, calib_velo_to_cam.txt, calib_cam_to_cam.txt, etc. ) composing the overall calib information. 
+        In this case fnames is a list and contents of the files contribute to a common dict. """
         calib = {}
         if not isinstance(fnames, list):
             fnames = [fnames]
@@ -321,40 +327,42 @@ class DataReaderKITTI(DataReader):
         return calib
 
     def inex_from_calib(self, calib, side):
-        inex = InExtr()
+        return inex_from_calib_kitti(calib, side)
 
-        im_shape = calib["S_rect_{:02d}".format(side)][::-1].astype(np.int32) ## ZMH: [height, width]
+def inex_from_calib_kitti(calib, side):
+    inex = InExtr()
 
-        inex.width = im_shape[1]
-        inex.height = im_shape[0]
+    im_shape = calib["S_rect_{:02d}".format(side)][::-1].astype(np.int32) ## ZMH: [height, width]
 
-        ## intrinsics
-        P_rect = calib['P_rect_{:02d}'.format(side)].reshape(3, 4).astype(np.float32)
-        K = P_rect[:, :3]
-        K = K_mat2py(K)
-        # K_unit = scale_K(K, old_width=im_shape[1], old_height=im_shape[0], torch_mode=False, align_corner=self.align_corner)
+    inex.width = im_shape[1]
+    inex.height = im_shape[0]
 
-        # inex.K_unit = K_unit
-        inex.K = K
+    ## intrinsics
+    P_rect = calib['P_rect_{:02d}'.format(side)].reshape(3, 4).astype(np.float32)
+    K = P_rect[:, :3]
+    K = K_mat2py(K)
+    # K_unit = scale_K(K, old_width=im_shape[1], old_height=im_shape[0], torch_mode=False, align_corner=self.align_corner)
 
-        ## extrinsics
-        T_cam_lidar = np.hstack((calib['R'].reshape(3, 3), calib['T'][..., np.newaxis]))
-        T_cam_lidar = np.vstack((T_cam_lidar, np.array([0, 0, 0, 1.0]))).astype(np.float32)
-        R_rect_cam = np.eye(4).astype(np.float32)
-        R_rect_cam[:3, :3] = calib['R_rect_00'].reshape(3, 3)
+    # inex.K_unit = K_unit
+    inex.K = K
 
-        K_inv = np.linalg.inv(K)
-        Kt = P_rect[:, 3:4]
-        t = np.dot(K_inv, Kt) # in KITTI's matlab devkit, tx = Kt[0,3]/fx, ty=tz=0
+    ## extrinsics
+    T_cam_lidar = np.hstack((calib['R'].reshape(3, 3), calib['T'][..., np.newaxis]))
+    T_cam_lidar = np.vstack((T_cam_lidar, np.array([0, 0, 0, 1.0]))).astype(np.float32)
+    R_rect_cam = np.eye(4).astype(np.float32)
+    R_rect_cam[:3, :3] = calib['R_rect_00'].reshape(3, 3)
 
-        P_rect_t = np.identity(4).astype(np.float32)
-        P_rect_t[:3, 3:4] = t # ZMH: 4*4
-        
-        P_rect_li = np.dot(P_rect_t, np.dot(R_rect_cam, T_cam_lidar))
+    K_inv = np.linalg.inv(K)
+    Kt = P_rect[:, 3:4]
+    t = np.dot(K_inv, Kt) # in KITTI's matlab devkit, tx = Kt[0,3]/fx, ty=tz=0
 
-        inex.P_cam_li = P_rect_li
-        return inex
+    P_rect_t = np.identity(4).astype(np.float32)
+    P_rect_t[:3, 3:4] = t # ZMH: 4*4
+    
+    P_rect_li = np.dot(P_rect_t, np.dot(R_rect_cam, T_cam_lidar))
 
+    inex.P_cam_li = P_rect_li
+    return inex
 
 class DataReaderWaymo(DataReader):
     def __init__(self, *args, **kwargs):
@@ -384,6 +392,8 @@ class DataReaderWaymo(DataReader):
         return T
 
     def load_calib(self, fnames):
+        """For calib, there could be more than one calib file (e.g. in KITTI, calib_velo_to_cam.txt, calib_cam_to_cam.txt, etc. ) composing the overall calib information. 
+        In this case fnames is a list and contents of the files contribute to a common dict. """
         calib = {}
         if not isinstance(fnames, list):
             fnames = [fnames]
@@ -439,6 +449,8 @@ class DataReaderVKITTI2(DataReader):
         raise NotImplementedError
 
     def load_calib(self, fnames):
+        """For calib, there could be more than one calib file (e.g. in KITTI, calib_velo_to_cam.txt, calib_cam_to_cam.txt, etc. ) composing the overall calib information. 
+        In this case fnames is a list and contents of the files contribute to a common dict. """
         calib = {}
         if not isinstance(fnames, list):
             fnames = [fnames]
