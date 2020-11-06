@@ -52,6 +52,25 @@ from monodepth2/cvo_utils.py
 # import cvo_dense_samp, cvo_dense_angle, cvo_dense_normal, cvo_dense_with_normal
 # import cvo_dense_with_normal_output
 
+class PtSampleInGridSigma(Function):
+    @staticmethod
+    def forward(ctx, pts, pts_info, pts_ells, grid_source, grid_valid, neighbor_range, ignore_ib=False):
+        """ pts: B*2*N, pts_info: B*C*N, grid_source: B*C*H*W (C could be xyz, rgb, ...), grid_valid: B*1*H*W, neighbor_range: int
+        """
+        outputs = cvo_dense_Sigma.forward(pts, pts_info, pts_ells, grid_source, grid_valid, neighbor_range, ignore_ib)
+        ctx.save_for_backward(pts, pts_info, pts_ells, grid_source, grid_valid)
+        ctx.neighbor_range = neighbor_range
+        ctx.ignore_ib = ignore_ib
+        return outputs
+
+    @staticmethod
+    def backward(ctx, dy):
+        # outputs, pts, pts_info, grid_source, grid_valid = ctx.saved_tensors
+        pts, pts_info, pts_ells, grid_source, grid_valid = ctx.saved_tensors
+        dy = dy.contiguous()
+        dx1, dx2, dells = cvo_dense_Sigma.backward(dy, pts, pts_info, pts_ells, grid_source, grid_valid, ctx.neighbor_range, ctx.ignore_ib)
+        return None, dx1, dells, dx2, None, None, None
+
 class PtSampleInGrid(Function):
     @staticmethod
     def forward(ctx, pts, pts_info, grid_source, grid_valid, neighbor_range, ell, ignore_ib=False, sqr=True, ell_basedist=0):

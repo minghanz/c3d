@@ -809,6 +809,56 @@ class C3DLoss(nn.Module):
 
         return inp_total
 
+    def forward_2D(self, grid_h, grid_w, pts_1, pts_ells_1, pts_2, pts_ells_2=None):
+        """
+        This function is to conceptually implement a c3d function with covariance matrix for each point. 
+        pts_1: a list of length B. Each element of the list is a tensor N*2. Each row is the coordinate of a point in 2D plane (image). 
+        pts_ells_1: a list of length B. Each element of the list is a tensor N*4. Each row is [sigma_x, sigma_y, rho_xy, weight] determining the covariance matrix of the corresponding point. 
+        Assume pts_1 is the sparse one with covariance matrix. pts_2 is dense and only has points, therefore we do not need pts_ells_2 here. 
+        """
+        ### convert to list in case the input pts is a batched tensor
+        if isinstance(pts_1, torch.Tensor):
+            pts_1 = [pts_1[i] for i in range(pts_1.shape[0])]
+        if isinstance(pts_2, torch.Tensor):
+            pts_2 = [pts_2[i] for i in range(pts_2.shape[0])]
+
+        pts_uvb_1 = []
+        for ib in range(len(pts_1)):
+            pts_uv_1_ib = pts_1[ib].round().to(dtype=int)
+            pts_uvb_1_ib = torch.cat([pts_uv_1_ib, torch.ones_like(pts_uv_1_ib[:,[0]])*ib], dim=1)  # N*3 
+            pts_uvb_1.append(pts_uvb_1_ib)
+        pts_uvb_cat_1 = torch.cat(pts_uvb_1, dim=0)  # BigN * 3
+        pts_uvb_cat_1_split = torch.split(pts_uvb_cat_1, 1, 1)
+        pts_uvb_cat_1 = pts_uvb_cat_1.transpose(0,1).unsqueeze(0)   # 1*3*N
+
+        pts_uvb_2 = []
+        for ib in range(len(pts_2)):
+            pts_uv_2_ib = pts_2[ib].round().to(dtype=int)
+            pts_uvb_2_ib = torch.cat([pts_uv_2_ib, torch.ones_like(pts_uv_2_ib[:,[0]])*ib], dim=1)  # N*3 
+            pts_uvb_2.append(pts_uvb_2_ib)
+        pts_uvb_cat_2 = torch.cat(pts_uvb_2, dim=0)  # BigN * 3
+        pts_uvb_cat_2_split = torch.split(pts_uvb_cat_2, 1, 1)
+        pts_uvb_cat_2 = pts_uvb_cat_2.transpose(0,1).unsqueeze(0)   # 1*3*N
+
+        pts_cat_1 = torch.cat(pts_1, dim=0).transpose(0,1).unsqueeze(0)             # 1*2*N
+        pts_ells_cat_1 = torch.cat(pts_ells_1, dim=0).transpose(0,1).unsqueeze(0)   # 1*4*N
+        pts_cat_2 = torch.cat(pts_2, dim=0).transpose(0,1).unsqueeze(0)             # 1*2*N
+        if pts_ells_2 is not None:
+            pts_ells_cat_2 = torch.cat(pts_ells_2, dim=0).transpose(0,1).unsqueeze(0)   # 1*4*N
+        
+        grid_shape = (len(pts_2), 2, grid_h, grid_w)
+        pts_grid_2 = grid_from_concat_flat_func(pts_uvb_cat_2_split, pts_cat_2, grid_shape)
+
+        mask_cat_2 = torch.ones_like(pts_cat_2[:,[0]]]).to(dtype=torch.bool)
+        grid_mask_shape = (len(pts_2), 1, grid_h, grid_w)
+        mask_grid_2 = grid_from_concat_flat_func(pts_uvb_cat_2_split, mask_cat_2, grid_mask_shape)
+
+        inp = PtSampleInGridSigma.apply(pts_uvb_cat_1, pts_cat_1, pts_ells_cat_1, pts_grid_2, mask_grid_2, self.opts.neighbor_range, False)
+
+        inp_sum = inp.sum()
+
+        return inp_sum
+
     # @torchsnooper.snoop()
     def forward_with_flow(self, depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname, debug_save_pcd=False):
         if self.opts.debug_input:
