@@ -26,6 +26,10 @@ from .utils_general.timing import Timing
 
 import torchsnooper
 import pickle
+import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
+import io
+from PIL import Image
 
 # import logging
 class PCL_C3D_Flat:
@@ -799,18 +803,162 @@ class C3DLoss(nn.Module):
 
         return inp_total
 
-    def forward_2D(self, grid_h, grid_w, pts_1, pts_ells_1, pts_2, pts_ells_2=None):
+    def vis_pts_2D(self, pts, pts_ells, grid_h, grid_w, pts_full=None, mu=False):
+        """https://www.xarg.org/2018/04/how-to-plot-a-covariance-error-ellipse/
+        https://www.tensorflow.org/tensorboard/image_summaries"""
+        batch_size = len(pts)
+
+        buffs = []
+        p = 0.95
+        s = -2 * np.log(1 - p)
+        for ib in range(batch_size):
+            ells = []
+            alphas = []
+            sig_xs = []
+            sig_ys = []
+            rho_xys = []
+            dets = []
+            weights = []
+            n_pts = pts[ib].shape[0]
+            for ip in range( n_pts ):
+                sig_x = pts_ells[ib][0, ip].item()
+                sig_y = pts_ells[ib][1, ip].item()
+                rho_xy = pts_ells[ib][2, ip].item()
+                weight = pts_ells[ib][3, ip].item()
+                
+                a = sig_x * sig_x
+                b = rho_xy * sig_x * sig_y
+                c = b
+                d = sig_y * sig_y
+
+                tmp = np.sqrt((a - d) * (a - d) + 4 * b * c)
+
+                v11 = -(tmp - a + d) / (2 * c+1e-7)
+                v12 = (tmp + a - d) / (2 * c+1e-7)
+                v21 = 1
+                v22 = 1
+                angle = np.arctan2(1, v11) / np.pi * 180    # degree
+
+                lambda1 = (a + d - tmp) / 2
+                lambda2 = (a + d + tmp) / 2
+                e1 = np.sqrt(s * lambda1)
+                e2 = np.sqrt(s * lambda2)
+
+                ### avoid that the diameter shrinks too small to plot on the image
+                e1 = max(e1, 1e-1)
+                e2 = max(e2, 1e-1)
+
+                det = a * d - b * c
+
+                det = max(det, 1e-7)
+
+                sig_xs.append(sig_x)
+                sig_ys.append(sig_y)
+                rho_xys.append(rho_xy)
+                dets.append(det)
+                weights.append(weight)
+                
+                x0 = pts[ib][ip, 1].item()
+                y0 = pts[ib][ip, 0].item()
+                if mu:
+                    x0 = x0 + pts_ells[ib][5, ip].item()
+                    y0 = y0 + pts_ells[ib][4, ip].item()
+
+                ### input coordinate is x-down, y-right. Plot coordinate is X-right, Y-down.
+                ### X = y, Y = -x + x0
+                ### Theta = atan2(Y, X) = atan2(-x, y) = - atan2(x, y) = - (90 - atan2(y, x)) = theta - 90
+                # ell = Ellipse(xy=pts[ib][ip], width=e1, height=e2, angle=angle)
+                # ell = Ellipse(xy=(pts[ib][ip, 1], -pts[ib][ip, 0] + grid_h), width=3, height=1, angle=- 90)
+                ell = Ellipse(xy=(x0, -y0 + grid_h), width=e1, height=e2, angle=angle - 90) # - 90
+                # ell = Ellipse(xy=pts[ib][ip], width=3, height=3, angle=angle)
+                alpha = weight / det
+
+                ells.append(ell)
+                alphas.append(alpha)
+
+            sig_xs = np.array(sig_xs)
+            sig_ys = np.array(sig_ys)
+            rho_xys = np.array(rho_xys)
+            dets = np.array(dets)
+            weights = np.array(weights)
+
+            alphas = np.array(alphas)
+            alphas = alphas / np.max([alphas.max(), 1e-7]) * 0.5
+
+            fig = plt.figure()
+            ax = fig.add_subplot(111, aspect='equal')
+            if pts_full is not None:
+                plt.plot(pts_full[ib].cpu().detach().numpy()[:, 1], - pts_full[ib].cpu().detach().numpy()[:, 0] + grid_h, 'g.')
+            plt.plot(pts[ib].cpu().detach().numpy()[:, 1], - pts[ib].cpu().detach().numpy()[:, 0] + grid_h, 'bo')
+            if mu:
+                plt.plot(pts[ib].cpu().detach().numpy()[:, 1] + pts_ells[ib].cpu().detach().numpy()[5, :], - (pts[ib].cpu().detach().numpy()[:, 0] + pts_ells[ib].cpu().detach().numpy()[4, :]) + grid_h, 'r.')
+            for ip in range( n_pts ):
+                ax.add_artist(ells[ip])
+                ells[ip].set_clip_box(ax.bbox)
+                ells[ip].set_alpha(alphas[ip])
+                # ells[ip].set_alpha(1)
+                ells[ip].set_facecolor( (0.8,0,0) )
+
+            ax.set_xlim(0, grid_h)
+            ax.set_ylim(0, grid_w)
+
+            title_test = "sig_x: {:.2f}, {:.2f}, {:.2f}, sig_y: {:.2f}, {:.2f}, {:.2f}, rho_xy: {:.2f}, {:.2f}, {:.2f}, \n".format(
+                sig_xs.min(), sig_xs.mean(), sig_xs.max(), sig_ys.min(), sig_ys.mean(), sig_ys.max(), rho_xys.min(), rho_xys.mean(), rho_xys.max()) + \
+                            "det: {:.2f}, {:.2f}, {:.2f}, alpha: {:.2f}, {:.2f}, {:.2f}, weights: {:.2f}, {:.2f}, {:.2f}".format(
+                dets.min(), dets.mean(), dets.max(), alphas.min(), alphas.mean(), alphas.max(), weights.min(), weights.mean(), weights.max())
+            plt.title(title_test)
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png')
+            plt.close(fig)
+            buf.seek(0)
+            pic = Image.open(buf)
+            pic_array = np.array(pic)
+            pic_array = pic_array.transpose(2,0,1)
+            pic.close()
+            buffs.append(pic_array)
+
+        return buffs
+
+
+    def forward_2D(self, grid_h, grid_w, pts_1_raw, pts_ells_1, pts_2, pts_ells_2=None, vis=False, mu=False):
         """
         This function is to conceptually implement a c3d function with covariance matrix for each point. 
-        pts_1: a list of length B. Each element of the list is a tensor N*2. Each row is the coordinate of a point in 2D plane (image). 
-        pts_ells_1: a list of length B. Each element of the list is a tensor N*4. Each row is [sigma_x, sigma_y, rho_xy, weight] determining the covariance matrix of the corresponding point. 
+        pts_1: a list of length B. Each element of the list is a tensor N*2 (or N*3 with z dim = 0). Each row is the coordinate of a point in 2D plane (image). 
+        pts_ells_1: a list of length B. Each element of the list is a tensor 4*N. Each row is [sigma_x, sigma_y, rho_xy, weight] determining the covariance matrix of the corresponding point. 
         Assume pts_1 is the sparse one with covariance matrix. pts_2 is dense and only has points, therefore we do not need pts_ells_2 here. 
         """
         ### convert to list in case the input pts is a batched tensor
-        if isinstance(pts_1, torch.Tensor):
-            pts_1 = [pts_1[i] for i in range(pts_1.shape[0])]
+
+        # print("pts_1",  pts_1.min(), pts_1.max())
+        # print("pts_ells_1", pts_ells_1.min(), pts_ells_1.max())
+        # print("pts_2", pts_2[0].min(), pts_2[0].max())
+
+
+        if isinstance(pts_1_raw, torch.Tensor):
+            pts_1_raw = [pts_1_raw[i] for i in range(pts_1_raw.shape[0])]
         if isinstance(pts_2, torch.Tensor):
             pts_2 = [pts_2[i] for i in range(pts_2.shape[0])]
+        if isinstance(pts_ells_1, torch.Tensor):
+            pts_ells_1 = [pts_ells_1[i] for i in range(pts_ells_1.shape[0])]
+
+        img_buffs = None
+        if vis:
+            img_buffs = self.vis_pts_2D(pts_1_raw, pts_ells_1, grid_h, grid_w, pts_2, mu=mu)
+
+        for ib in range(len(pts_1_raw)):
+            pts_1_raw[ib] = pts_1_raw[ib][:, :2]
+            pts_2[ib] = pts_2[ib][:, :2]
+
+        pts_1 = [None] * len(pts_1_raw)
+        if mu:
+            for ib in range(len(pts_1)):
+                pts_1_temp = pts_1_raw[ib] + pts_ells_1[ib][4:6, :].transpose(0,1)
+                pts_1_temp_1 = torch.clamp(pts_1_temp[:,0], min=0, max=grid_w-1)
+                pts_1_temp_2 = torch.clamp(pts_1_temp[:,1], min=0, max=grid_h-1)
+                pts_1[ib] = torch.stack([pts_1_temp_1, pts_1_temp_2], dim=1)
+        else:
+            for ib in range(len(pts_1)):
+                pts_1[ib] = pts_1_raw[ib]
 
         pts_uvb_1 = []
         for ib in range(len(pts_1)):
@@ -831,23 +979,81 @@ class C3DLoss(nn.Module):
         pts_uvb_cat_2 = pts_uvb_cat_2.transpose(0,1).unsqueeze(0)   # 1*3*N
 
         pts_cat_1 = torch.cat(pts_1, dim=0).transpose(0,1).unsqueeze(0)             # 1*2*N
-        pts_ells_cat_1 = torch.cat(pts_ells_1, dim=0).transpose(0,1).unsqueeze(0)   # 1*4*N
+        pts_cat_1 = pts_cat_1[:,:2]
+        pts_ells_cat_1 = torch.cat(pts_ells_1, dim=1).unsqueeze(0)   # 1*4*N
+        pts_ells_cat_1 = pts_ells_cat_1[:, :4]
         pts_cat_2 = torch.cat(pts_2, dim=0).transpose(0,1).unsqueeze(0)             # 1*2*N
+        pts_cat_2 = pts_cat_2[:,:2]
         if pts_ells_2 is not None:
-            pts_ells_cat_2 = torch.cat(pts_ells_2, dim=0).transpose(0,1).unsqueeze(0)   # 1*4*N
+            pts_ells_cat_2 = torch.cat(pts_ells_2, dim=1).unsqueeze(0)   # 1*4*N
         
+        ### griding pts_2
         grid_shape = (len(pts_2), 2, grid_h, grid_w)
         pts_grid_2 = grid_from_concat_flat_func(pts_uvb_cat_2_split, pts_cat_2, grid_shape)
 
-        mask_cat_2 = torch.ones_like(pts_cat_2[:,[0]]]).to(dtype=torch.bool)
+        mask_cat_2 = torch.ones_like(pts_cat_2[:,[0]]).to(dtype=torch.bool)
         grid_mask_shape = (len(pts_2), 1, grid_h, grid_w)
         mask_grid_2 = grid_from_concat_flat_func(pts_uvb_cat_2_split, mask_cat_2, grid_mask_shape)
 
-        inp = PtSampleInGridSigma.apply(pts_uvb_cat_1, pts_cat_1, pts_ells_cat_1, pts_grid_2, mask_grid_2, self.opts.neighbor_range, False)
+        ### griding pts_1
+        grid_shape = (len(pts_1), 2, grid_h, grid_w)
+        pts_grid_1 = grid_from_concat_flat_func(pts_uvb_cat_1_split, pts_cat_1, grid_shape)
 
-        inp_sum = inp.sum()
+        grid_shape = (len(pts_1), 4, grid_h, grid_w)
+        pts_ells_grid_1 = grid_from_concat_flat_func(pts_uvb_cat_1_split, pts_ells_cat_1, grid_shape)
 
-        return inp_sum
+        mask_cat_1 = torch.ones_like(pts_cat_1[:,[0]]).to(dtype=torch.bool)
+        grid_mask_shape = (len(pts_1), 1, grid_h, grid_w)
+        mask_grid_1 = grid_from_concat_flat_func(pts_uvb_cat_1_split, mask_cat_1, grid_mask_shape)
+
+        ### convert dtype
+        pts_uvb_cat_1 = pts_uvb_cat_1.float()
+        pts_uvb_cat_2 = pts_uvb_cat_2.float()
+
+        # ### center at pts_1
+        # inp = PtSampleInGridSigma.apply(pts_uvb_cat_1.contiguous(), pts_cat_1.contiguous(), pts_ells_cat_1.contiguous(), pts_grid_2.contiguous(), mask_grid_2.contiguous(), self.opts.neighbor_range, False)
+
+        # ### center at pts_1
+        # # inp_sum = inp.sum()
+        # # print("inp", inp.min(), inp.max(), inp.mean())
+        # # print("original", inp.numel())
+        # inp = inp[inp>0]
+        # nel = inp.numel()
+        # # print("nzero", nel)
+        # if nel == 0:
+        #     print("no positive output! ")
+        #     inp = 0
+        # else:
+        #     inp = torch.clamp(inp, min=1e-7)
+        #     inp_sum = 1 / ((1 / inp).mean()) 
+        #     inp_sum = inp_sum * nel
+
+        
+
+        ### center at pts_2
+        inp = PtSampleInGridSigmaGrid.apply(pts_uvb_cat_2.contiguous(), pts_cat_2.contiguous(), pts_ells_grid_1.contiguous(), pts_grid_1.contiguous(), mask_grid_1.contiguous(), self.opts.neighbor_range, False)
+        inp = inp / (2*np.pi)
+
+        # print("before", inp.shape)
+        inp = inp.sum(dim=1)
+        # print(inp)
+        # inp, _ = inp.max(dim=1)
+        # print("after", inp.shape)
+        # print("inp min max", inp.min(), inp.max())
+
+        ### select the covered points
+        inp = inp[inp>0]
+        # ### set a minimum for inp
+        # inp = torch.clamp(inp, min=1e-7)
+
+        ### harmonic mean
+        nel = inp.numel()
+        inp_sum = 1 / ((1 / inp).mean()) 
+        inp_sum = inp_sum * nel
+        # ### log likelihood
+        # inp_sum = torch.log(inp).sum()
+
+        return inp_sum, img_buffs
 
     # @torchsnooper.snoop()
     def forward_with_flow(self, depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname, debug_save_pcd=False):

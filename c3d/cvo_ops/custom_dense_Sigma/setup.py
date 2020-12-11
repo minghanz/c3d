@@ -13,6 +13,10 @@ setup(
             'cvo_dense_Sigma_cuda.cpp',
             'cvo_dense_Sigma_cuda_kernel.cu',
         ]),
+        CUDAExtension('cvo_dense_Sigma_grid', [
+            'cvo_dense_Sigma_grid_cuda.cpp',
+            'cvo_dense_Sigma_grid_cuda_kernel.cu',
+        ]),
     ],
     cmdclass={
         'build_ext': BuildExtension

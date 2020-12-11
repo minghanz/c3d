@@ -175,8 +175,8 @@ torch::Tensor sub_norm_cuda_forward(
   int device_id = x1.device().index();
   cudaSetDevice(device_id);
 
-  // AT_DISPATCH_FLOATING_TYPES
- AT_DISPATCH_ALL_TYPES_AND_HALF(x1.type(), "sub_norm_forward_cuda", ([&] {
+  // AT_DISPATCH_FLOATING_TYPES AT_DISPATCH_ALL_TYPES_AND_HALF
+ AT_DISPATCH_FLOATING_TYPES(x1.type(), "sub_norm_forward_cuda", ([&] {
     sub_norm_cuda_forward_kernel<scalar_t><<<blocks, threads>>>(
       x1.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
       x2.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
@@ -217,7 +217,8 @@ std::vector<torch::Tensor> sub_norm_cuda_backward(
   cudaSetDevice(device_id);
 
   const dim3 blocks_dx12(( (n1+n2) * channel_size + threads - 1) / threads, batch_size);
-  AT_DISPATCH_ALL_TYPES_AND_HALF(dy.type(), "sub_norm_backward_cuda_dx", ([&] {
+  // AT_DISPATCH_ALL_TYPES_AND_HALF
+  AT_DISPATCH_FLOATING_TYPES(dy.type(), "sub_norm_backward_cuda_dx", ([&] {
     sub_norm_cuda_backward_kernel_dx<scalar_t><<<blocks_dx12, threads>>>(
       dx1.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
       dx2.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),

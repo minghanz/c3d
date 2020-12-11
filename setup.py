@@ -45,6 +45,14 @@ setup(
             'c3d/cvo_ops/custom_cross_prod/cross_prod_cuda.cpp',
             'c3d/cvo_ops/custom_cross_prod/cross_prod_cuda_kernel.cu',
         ]),
+        CUDAExtension('c3d.cvo_ops.cvo_dense_Sigma', [
+            'c3d/cvo_ops/custom_dense_Sigma/cvo_dense_Sigma_cuda.cpp',
+            'c3d/cvo_ops/custom_dense_Sigma/cvo_dense_Sigma_cuda_kernel.cu',
+        ]),
+        CUDAExtension('c3d.cvo_ops.cvo_dense_Sigma_grid', [
+            'c3d/cvo_ops/custom_dense_Sigma/cvo_dense_Sigma_grid_cuda.cpp',
+            'c3d/cvo_ops/custom_dense_Sigma/cvo_dense_Sigma_grid_cuda_kernel.cu',
+        ]),
         
     ],
     packages=find_packages(),

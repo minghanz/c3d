@@ -1,5 +1,5 @@
 #!/bin/sh
-for subdir in custom_dense custom_dense_angle custom_dense_dist custom_dense_normal custom_dense_with_normal custom_cross_prod custom_cross_subtract custom_norm custom_ori
+for subdir in custom_dense custom_dense_angle custom_dense_dist custom_dense_normal custom_dense_with_normal custom_cross_prod custom_cross_subtract custom_norm custom_ori custom_dense_Sigma custom_dense_Sigma_grid
 do
     cd "$subdir"
     if [ -d build ]

@@ -10,10 +10,10 @@
 namespace {
 
 template <typename scalar_t>
-__global__ void cvo_dense_Sigma_cuda_forward_kernel(
+__global__ void cvo_dense_Sigma_grid_cuda_forward_kernel(
     const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> pts,
     const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> pts_info,
-    const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> pts_ells,
+    const torch::PackedTensorAccessor<scalar_t,4,torch::RestrictPtrTraits,size_t> grid_ells,
     const torch::PackedTensorAccessor<scalar_t,4,torch::RestrictPtrTraits,size_t> grid_source,
     const torch::PackedTensorAccessor<bool,4,torch::RestrictPtrTraits,size_t> grid_valid,
     const int neighbor_range, 
@@ -51,10 +51,10 @@ __global__ void cvo_dense_Sigma_cuda_forward_kernel(
         float det;
         float inv_xx, inv_xy, inv_yy;
         if (C == 2){
-          sigma_x = pts_ells[0][0][in];
-          sigma_y = pts_ells[0][1][in];
-          rho_xy = pts_ells[0][2][in];
-          weight = pts_ells[0][3][in];
+          sigma_x = grid_ells[ib][0][v+innh][u+innw];
+          sigma_y = grid_ells[ib][1][v+innh][u+innw];
+          rho_xy = grid_ells[ib][2][v+innh][u+innw];
+          weight = grid_ells[ib][3][v+innh][u+innw];
           det = (1 - rho_xy*rho_xy) * sigma_x * sigma_x * sigma_y * sigma_y;
           if (det < 1e-7){
             det = 1e-7;
@@ -64,12 +64,12 @@ __global__ void cvo_dense_Sigma_cuda_forward_kernel(
           inv_xy = -rho_xy * sigma_x * sigma_y / det;
         }
         else if (C == 3){
-          sigma_x = pts_ells[0][0][in];
-          sigma_y = pts_ells[0][1][in];
-          sigma_z = pts_ells[0][2][in];
-          rho_xy = pts_ells[0][3][in];
-          rho_yz = pts_ells[0][4][in];
-          rho_zx = pts_ells[0][5][in];
+          sigma_x = grid_ells[ib][0][v+innh][u+innw];
+          sigma_y = grid_ells[ib][1][v+innh][u+innw];
+          sigma_z = grid_ells[ib][2][v+innh][u+innw];
+          rho_xy = grid_ells[ib][3][v+innh][u+innw];
+          rho_yz = grid_ells[ib][4][v+innh][u+innw];
+          rho_zx = grid_ells[ib][5][v+innh][u+innw];
         }
 
         float det_neghalf = 1 / sqrt(det);
@@ -88,14 +88,14 @@ __global__ void cvo_dense_Sigma_cuda_forward_kernel(
 }
 
 template <typename scalar_t>
-__global__ void cvo_dense_Sigma_cuda_backward_kernel(
+__global__ void cvo_dense_Sigma_grid_cuda_backward_kernel(
   torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> dx1,
   torch::PackedTensorAccessor<scalar_t,4,torch::RestrictPtrTraits,size_t> dx2,
-  torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> dpts_ells,
+  torch::PackedTensorAccessor<scalar_t,4,torch::RestrictPtrTraits,size_t> dgrid_ells,
   const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> dy,
   const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> pts,
   const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> pts_info,
-  const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> pts_ells,
+  const torch::PackedTensorAccessor<scalar_t,4,torch::RestrictPtrTraits,size_t> grid_ells,
   const torch::PackedTensorAccessor<scalar_t,4,torch::RestrictPtrTraits,size_t> grid_source,
   const torch::PackedTensorAccessor<bool,4,torch::RestrictPtrTraits,size_t> grid_valid,
   const int neighbor_range, 
@@ -138,10 +138,10 @@ __global__ void cvo_dense_Sigma_cuda_backward_kernel(
           float det;
           float inv_xx, inv_xy, inv_yy;
           if (C == 2){
-            sigma_x = pts_ells[0][0][in];
-            sigma_y = pts_ells[0][1][in];
-            rho_xy = pts_ells[0][2][in];
-            weight = pts_ells[0][3][in];
+            sigma_x = grid_ells[ib][0][v+innh][u+innw];
+            sigma_y = grid_ells[ib][1][v+innh][u+innw];
+            rho_xy = grid_ells[ib][2][v+innh][u+innw];
+            weight = grid_ells[ib][3][v+innh][u+innw];
             det = (1 - rho_xy*rho_xy) * sigma_x * sigma_x * sigma_y * sigma_y;
             if (det < 1e-7){
               det = 1e-7;
@@ -151,12 +151,12 @@ __global__ void cvo_dense_Sigma_cuda_backward_kernel(
             inv_xy = -rho_xy * sigma_x * sigma_y / det;
           }
           else if (C == 3){
-            sigma_x = pts_ells[0][0][in];
-            sigma_y = pts_ells[0][1][in];
-            sigma_z = pts_ells[0][2][in];
-            rho_xy = pts_ells[0][3][in];
-            rho_yz = pts_ells[0][4][in];
-            rho_zx = pts_ells[0][5][in];
+            sigma_x = grid_ells[ib][0][v+innh][u+innw];
+            sigma_y = grid_ells[ib][1][v+innh][u+innw];
+            sigma_z = grid_ells[ib][2][v+innh][u+innw];
+            rho_xy = grid_ells[ib][3][v+innh][u+innw];
+            rho_yz = grid_ells[ib][4][v+innh][u+innw];
+            rho_zx = grid_ells[ib][5][v+innh][u+innw];
           }
 
           float det_neghalf = 1 / sqrt(det);
@@ -209,10 +209,10 @@ __global__ void cvo_dense_Sigma_cuda_backward_kernel(
 
           float res_dweight = det_neghalf * res_exp;
 
-          dpts_ells[0][0][in] += dy[0][inn][in] * res_dsigma_x;
-          dpts_ells[0][1][in] += dy[0][inn][in] * res_dsigma_y;
-          dpts_ells[0][2][in] += dy[0][inn][in] * res_drho_xy;
-          dpts_ells[0][3][in] += dy[0][inn][in] * res_dweight;
+          dgrid_ells[ib][0][v+innh][u+innw] += dy[0][inn][in] * res_dsigma_x;
+          dgrid_ells[ib][1][v+innh][u+innw] += dy[0][inn][in] * res_dsigma_y;
+          dgrid_ells[ib][2][v+innh][u+innw] += dy[0][inn][in] * res_drho_xy;
+          dgrid_ells[ib][3][v+innh][u+innw] += dy[0][inn][in] * res_dweight;
 
         }
       }
@@ -223,10 +223,10 @@ __global__ void cvo_dense_Sigma_cuda_backward_kernel(
 
 } // namespace
 
-torch::Tensor cvo_dense_Sigma_cuda_forward(
+torch::Tensor cvo_dense_Sigma_grid_cuda_forward(
     torch::Tensor pts,
     torch::Tensor pts_info, 
-    torch::Tensor pts_ells, 
+    torch::Tensor grid_ells, 
     torch::Tensor grid_source, 
     torch::Tensor grid_valid, 
     int neighbor_range,
@@ -258,11 +258,11 @@ torch::Tensor cvo_dense_Sigma_cuda_forward(
   cudaSetDevice(device_id);
 
   // AT_DISPATCH_FLOATING_TYPES // AT_DISPATCH_ALL_TYPES_AND_HALF
-  AT_DISPATCH_FLOATING_TYPES(pts_info.type(), "cvo_dense_Sigma_forward_cuda", ([&] {
-    cvo_dense_Sigma_cuda_forward_kernel<scalar_t><<<blocks, threads>>>(
+  AT_DISPATCH_FLOATING_TYPES(pts_info.type(), "cvo_dense_Sigma_grid_forward_cuda", ([&] {
+    cvo_dense_Sigma_grid_cuda_forward_kernel<scalar_t><<<blocks, threads>>>(
       pts.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
       pts_info.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
-      pts_ells.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
+      grid_ells.packed_accessor<scalar_t,4,torch::RestrictPtrTraits,size_t>(),
       grid_source.packed_accessor<scalar_t,4,torch::RestrictPtrTraits,size_t>(),
       grid_valid.packed_accessor<bool,4,torch::RestrictPtrTraits,size_t>(),
       neighbor_range, 
@@ -275,11 +275,11 @@ torch::Tensor cvo_dense_Sigma_cuda_forward(
   return y;
 }
 
-std::vector<torch::Tensor> cvo_dense_Sigma_cuda_backward(
+std::vector<torch::Tensor> cvo_dense_Sigma_grid_cuda_backward(
     torch::Tensor dy, 
     torch::Tensor pts,
     torch::Tensor pts_info, 
-    torch::Tensor pts_ells, 
+    torch::Tensor grid_ells, 
     torch::Tensor grid_source, 
     torch::Tensor grid_valid, 
     int neighbor_range,
@@ -297,7 +297,7 @@ std::vector<torch::Tensor> cvo_dense_Sigma_cuda_backward(
 
   auto dx1 = torch::zeros({1, C, N}, pts_info.device());
   auto dx2 = torch::zeros({B, C, H, W}, pts_info.device());
-  auto dpts_ells = torch::zeros({1, 4, N}, pts_info.device());  // for C==2, 3 corresponds to sigma_x, sigma_y, rho_xy
+  auto dgrid_ells = torch::zeros({B, 4, H, W}, pts_info.device());  // for C==2, 3 corresponds to sigma_x, sigma_y, rho_xy
 
   const int threads = 1024;
 
@@ -308,15 +308,15 @@ std::vector<torch::Tensor> cvo_dense_Sigma_cuda_backward(
   const dim3 blocks_dx12(( N + threads - 1) / threads);
 
   for (int inn = 0; inn < NN; inn++){
-    AT_DISPATCH_FLOATING_TYPES(dy.type(), "cvo_dense_Sigma_backward_cuda", ([&] {
-      cvo_dense_Sigma_cuda_backward_kernel<scalar_t><<<blocks_dx12, threads>>>(
+    AT_DISPATCH_FLOATING_TYPES(dy.type(), "cvo_dense_Sigma_grid_backward_cuda", ([&] {
+      cvo_dense_Sigma_grid_cuda_backward_kernel<scalar_t><<<blocks_dx12, threads>>>(
         dx1.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
         dx2.packed_accessor<scalar_t,4,torch::RestrictPtrTraits,size_t>(),
-        dpts_ells.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
+        dgrid_ells.packed_accessor<scalar_t,4,torch::RestrictPtrTraits,size_t>(),
         dy.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(), 
         pts.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
         pts_info.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
-        pts_ells.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
+        grid_ells.packed_accessor<scalar_t,4,torch::RestrictPtrTraits,size_t>(),
         grid_source.packed_accessor<scalar_t,4,torch::RestrictPtrTraits,size_t>(),
         grid_valid.packed_accessor<bool,4,torch::RestrictPtrTraits,size_t>(),
         neighbor_range, 
@@ -326,5 +326,5 @@ std::vector<torch::Tensor> cvo_dense_Sigma_cuda_backward(
     cudaDeviceSynchronize();  
   }
 
-  return {dx1, dx2, dpts_ells};
+  return {dx1, dx2, dgrid_ells};
 }
