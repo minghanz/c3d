@@ -58,7 +58,7 @@ class DataFinder:
         self.fnames_preload = {}
         for ftype in self.preload_ftypes:
             self.fnames_preload[ftype] = {}
-            self.get_fname_dict(self.fnames_preload[ftype], finfo_dict=self.finfos, level_list=[], desired_depth=len(self.ofile_level_names[ftype]), ftype=ftype)
+            self.get_fname_dict(self.fnames_preload[ftype], finfo_dict=self.finfos, level_list=[], desired_depth=len(self.ofile_level_names[ftype]), ftype=ftype)   # levels in ofile_level_names[ftype] should be continuous
 
     def ntps_from_given_dict(self, finfo_dict, keys, dict_known, output_ntps):
         levels = list(dict_known.keys())
@@ -118,6 +118,7 @@ class DataFinder:
     def fname_from_ntp(self, level_ntp, new_ftype):
         assert new_ftype in self.ftypes, "{} {}".format(new_ftype, self.ftypes)
         fname = self.fname_from_ntp_parsed(new_ftype, *level_ntp)     # unpack the namedtuple before feeding into the function
+        ### In most cases fname is a single path. For calib, there could be more than one calib file (e.g. in KITTI, calib_velo_to_cam.txt, calib_cam_to_cam.txt, etc. ) composing the overall calib information. 
         if isinstance(fname, list):
             fname = [ os.path.join(self.data_root, f) for f in fname ]
         else:
@@ -390,7 +391,7 @@ class DataFinderKITTI(DataFinder):
         self.preload_ftypes = ['calib']
         # self.preload_ftypes = []
 
-        self.calib_filenames = ['calib_cam_to_cam', 'calib_velo_to_cam']
+        self.calib_filenames = ['calib_cam_to_cam', 'calib_velo_to_cam']    ### Don't include calib_imu_to_velo.txt, which will overwrite items of calib_velo_to_cam. 
         super(DataFinderKITTI, self).__init__(name='kitti', *args, **kwargs)
 
     def ntp_from_fname_parse(self, fname, ftype):

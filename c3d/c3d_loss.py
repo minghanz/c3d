@@ -319,7 +319,9 @@ def flow_pc3d(pcl_c3d, flow_grid, flow_mask_grid, K_cur, feat_comm_keys, use_nor
     xyz_grid = pcl_c3d.grid.feature['xyz']
     xyz_flat = xyz_grid.reshape(batch_size, 3, -1)
     flow_flat = flow_grid.reshape(batch_size, 3, -1)
-    xyz_flowed_flat = xyz_flat + flow_flat
+    flow_flat = torch.cat([flow_flat[:,:2].detach(), flow_flat[:, 2:]], dim=1)      # detach the x and y dimension of the flow
+    xyz_flowed_flat = xyz_flat.detach() + flow_flat         # detach so that the flowed c3d loss only affects the flow gradient instead of both flow and depth. Otherwise depth could be confused. 
+    # logging.info("xyz_flat.detach(): %s"%(xyz_flat.detach().requires_grad))
 
     ### mask out invalid pixels and project to image uv coordinate
     xyz_mask_grid = pcl_c3d.grid.mask
@@ -468,10 +470,10 @@ def flow_pc3d(pcl_c3d, flow_grid, flow_mask_grid, K_cur, feat_comm_keys, use_nor
     return flow_pcl_c3d_flat, flow_pcl_c3d_grid
 
 class C3DLoss(nn.Module):
-    def __init__(self, seq_frame_n=1, flow_mode=False):
+    def __init__(self, seq_frame_n=1): # , flow_mode=False
         super(C3DLoss, self).__init__()
         self.seq_frame_n = seq_frame_n
-        self.flow_mode = flow_mode
+        # self.flow_mode = flow_mode
 
         self.feat_inp_self = ["xyz", "hsv"]
         self.feat_inp_cross = ["xyz", "hsv"]
@@ -529,6 +531,10 @@ class C3DLoss(nn.Module):
                             help="if set, write the input depth, rgb, etc. to file to show whether the input is correct. ")
         parser.add_argument("--debug_path",            type=str, required=False, default=None, 
                             help="the path to output debug files. Required if debug_input is True")
+        parser.add_argument("--flow_mode",           action="store_true", 
+                            help="if set, consider flow in c3d loss. Otherwise only use the depth")
+        parser.add_argument("--log_loss",            action="store_true", 
+                            help="if set, use log of c3d_loss instead of the original sum of expoentials")
 
         if f_input is None:
             ### take parsed args or sys.argv[1:] as input
@@ -539,6 +545,8 @@ class C3DLoss(nn.Module):
             self.opts, rest = parser.parse_known_args([arg_filename_with_prefix])
             print("C3D options:")
             print(self.opts)
+
+        self.flow_mode = self.opts.flow_mode
 
         self.opts.ell_min = {}
         self.opts.ell_rand = {}
@@ -583,10 +591,12 @@ class C3DLoss(nn.Module):
         """
         self.internal_count += 1
 
-        if not self.flow_mode:
-            return self.forward_with_caminfo(rgb, depth, depth_gt, depth_mask, depth_gt_mask, nkern_fname, Ts, cam_info)
-        else:
-            return self.forward_with_flow(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname)
+        # if not self.flow_mode:
+        #     return self.forward_with_caminfo(rgb, depth, depth_gt, depth_mask, depth_gt_mask, nkern_fname, Ts, cam_info)
+        # else:
+        #     return self.forward_with_flow(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname)
+        
+        return self.forward_with_flow(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname)
 
     def load_pc3d(self, depth_img_dict, cam_info):
         ## ---------------------------------
@@ -635,7 +645,7 @@ class C3DLoss(nn.Module):
             depth_gt = depth_img_dict["gt"]
             depth_gt_mask = depth_img_dict["gt_mask"]
             rgb = depth_img_dict['rgb']
-            print(depth)
+            # print(depth)
 
             batch_size = depth_gt.shape[0]
 
@@ -1059,8 +1069,8 @@ class C3DLoss(nn.Module):
     def forward_with_flow(self, depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname, debug_save_pcd=False):
         if self.opts.debug_input:
             self.debug_flow_input_to_imgs(depth_img_dict_1, depth_img_dict_2)
-            self.debug_flow_input_to_pcds_raw(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
-            self.debug_flow_dump_pickle(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
+            # self.debug_flow_input_to_pcds_raw(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
+            # self.debug_flow_dump_pickle(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
         
         # self.timer.log("load_pc3d", 0, True)
         ## ---------------------------------
@@ -1075,26 +1085,27 @@ class C3DLoss(nn.Module):
         ## ---------------------------------
         K_cur, width_cur, height_cur, xy1_grid_cur, uvb_grid_cur = cam_info.unpack()
 
-        pc3ds_pred_flat_2from1, pc3ds_pred_grid_2from1 = flow_pc3d(pc3ds_1["pred"], flow_dict_1to2["pred"], flow_dict_1to2["mask"], K_cur, 
-                                        self.feat_comm, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts, return_stat=self.opts.norm_return_stat)#, timer=self.timer)
-        
-        # self.timer.log("flow_pc3d 2", 0, True)
+        if self.flow_mode:
+            pc3ds_pred_flat_2from1, pc3ds_pred_grid_2from1 = flow_pc3d(pc3ds_1["pred"], flow_dict_1to2["pred"], flow_dict_1to2["mask"], K_cur, 
+                                            self.feat_comm, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts, return_stat=self.opts.norm_return_stat)#, timer=self.timer)
+            
+            # self.timer.log("flow_pc3d 2", 0, True)
 
-        pc3ds_pred_flat_1from2, pc3ds_pred_grid_1from2 = flow_pc3d(pc3ds_2["pred"], flow_dict_2to1["pred"], flow_dict_2to1["mask"], K_cur, 
-                                        self.feat_comm, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts, return_stat=self.opts.norm_return_stat)#, timer=self.timer)
-        
-        # self.timer.log("gen_rand_ell", 0, True)
-        ## ---------------------------------
-        ## optional: save the pcl_c3d objects to file and generate pcd files from them
-        ## ---------------------------------
-        if self.opts.debug_input or debug_save_pcd:
-            pc3ds_1_from_2 = PCL_C3D()
-            pc3ds_1_from_2.flat = pc3ds_pred_flat_1from2
-            pc3ds_1_from_2.grid = pc3ds_pred_grid_1from2
-            pc3ds_2_from_1 = PCL_C3D()
-            pc3ds_2_from_1.flat = pc3ds_pred_flat_2from1
-            pc3ds_2_from_1.grid = pc3ds_pred_grid_2from1
-            self.debug_flow_input_to_pcds_pcl_c3d(pc3ds_1["pred"], pc3ds_2["pred"], pc3ds_1["gt"], pc3ds_2["gt"], pc3ds_1_from_2, pc3ds_2_from_1)
+            pc3ds_pred_flat_1from2, pc3ds_pred_grid_1from2 = flow_pc3d(pc3ds_2["pred"], flow_dict_2to1["pred"], flow_dict_2to1["mask"], K_cur, 
+                                            self.feat_comm, use_normal=self.opts.use_normal, sparse_nml_opts=self.nml_opts, return_stat=self.opts.norm_return_stat)#, timer=self.timer)
+            
+            # self.timer.log("gen_rand_ell", 0, True)
+            ## ---------------------------------
+            ## optional: save the pcl_c3d objects to file and generate pcd files from them
+            ## ---------------------------------
+            # if self.opts.debug_input or debug_save_pcd:
+            #     pc3ds_1_from_2 = PCL_C3D()
+            #     pc3ds_1_from_2.flat = pc3ds_pred_flat_1from2
+            #     pc3ds_1_from_2.grid = pc3ds_pred_grid_1from2
+            #     pc3ds_2_from_1 = PCL_C3D()
+            #     pc3ds_2_from_1.flat = pc3ds_pred_flat_2from1
+            #     pc3ds_2_from_1.grid = pc3ds_pred_grid_2from1
+            #     self.debug_flow_input_to_pcds_pcl_c3d(pc3ds_1["pred"], pc3ds_2["pred"], pc3ds_1["gt"], pc3ds_2["gt"], pc3ds_1_from_2, pc3ds_2_from_1)
 
         ## ---------------------------------
         ## configure length scale of kernels
@@ -1111,31 +1122,41 @@ class C3DLoss(nn.Module):
 
         # print_text = "1:{:.4f}, 2:{:.4f}, ".format(inp_1.item(), inp_2.item() )
 
-        if all(n > 0 for n in pc3ds_pred_flat_1from2.nb):
-            # self.timer.log("calc_inn_pc3d flow 1", 0, True)
+        if self.flow_mode:
+            if all(n > 0 for n in pc3ds_pred_flat_1from2.nb):
+                # self.timer.log("calc_inn_pc3d flow 1", 0, True)
 
-            inp_flow_1 = self.calc_inn_pc3d(pc3ds_1["gt"].flat, pc3ds_pred_grid_1from2, ell["pred_gt"], None) # TODO: specify the nkern_fname here
-            inp_total += inp_flow_1
+                ### match flowed pcl with gt
+                inp_flow_1 = self.calc_inn_pc3d(pc3ds_1["gt"].flat, pc3ds_pred_grid_1from2, ell["pred_gt"], None) # TODO: specify the nkern_fname here
+                inp_total += inp_flow_1
+                # ### match flowed pcl with pred
+                # inp_flow_1 = self.calc_inn_pc3d(pc3ds_1["pred"].flat, pc3ds_pred_grid_1from2, ell["pred_pred"], None) # TODO: specify the nkern_fname here
+                # inp_total += inp_flow_1 * self.opts.cross_pred_pred_weight
 
-            # print_text = print_text + "1 from 2:{:.4f}, ".format(inp_flow_1.item() )
-        
-            if torch.isnan(inp_flow_1).any():
-                self.debug_flow_dump_pickle(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
-                raise ValueError("NaN encountered in inp_flow_1")
 
-        if all(n > 0 for n in pc3ds_pred_flat_2from1.nb):
-            # self.timer.log("calc_inn_pc3d flow 2", 0, True)
+                # print_text = print_text + "1 from 2:{:.4f}, ".format(inp_flow_1.item() )
+            
+                if torch.isnan(inp_flow_1).any():
+                    self.debug_flow_dump_pickle(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
+                    raise ValueError("NaN encountered in inp_flow_1")
 
-            inp_flow_2 = self.calc_inn_pc3d(pc3ds_2["gt"].flat, pc3ds_pred_grid_2from1, ell["pred_gt"], None) # TODO: specify the nkern_fname here
-            inp_total += inp_flow_2
+            if all(n > 0 for n in pc3ds_pred_flat_2from1.nb):
+                # self.timer.log("calc_inn_pc3d flow 2", 0, True)
 
-            # print_text = print_text + "2 from 1:{:.4f}, ".format(inp_flow_2.item() )
+                ### match flowed pcl with gt
+                inp_flow_2 = self.calc_inn_pc3d(pc3ds_2["gt"].flat, pc3ds_pred_grid_2from1, ell["pred_gt"], None) # TODO: specify the nkern_fname here
+                inp_total += inp_flow_2
+                # ### match flowed pcl with pred
+                # inp_flow_2 = self.calc_inn_pc3d(pc3ds_2["pred"].flat, pc3ds_pred_grid_2from1, ell["pred_pred"], None) # TODO: specify the nkern_fname here
+                # inp_total += inp_flow_2 * self.opts.cross_pred_pred_weight
 
-            if torch.isnan(inp_flow_2).any():
-                self.debug_flow_dump_pickle(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
-                raise ValueError("NaN encountered in inp_flow_2")
+                # print_text = print_text + "2 from 1:{:.4f}, ".format(inp_flow_2.item() )
 
-        # print(print_text)
+                if torch.isnan(inp_flow_2).any():
+                    self.debug_flow_dump_pickle(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
+                    raise ValueError("NaN encountered in inp_flow_2")
+
+            # print(print_text)
 
         if torch.isnan(inp_total).any():
             self.debug_flow_dump_pickle(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info)
@@ -1252,6 +1273,9 @@ class C3DLoss(nn.Module):
                     
         inp = torch.prod( torch.cat([inp_feat_dict[feat] for feat in inp_feat_dict], dim=0), dim=0).sum()
 
+        if self.opts.log_loss:
+            inp = torch.log(inp.clamp(min=1e-8))
+            
         return inp
 
     def get_normal_feature(self):

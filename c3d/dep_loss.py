@@ -13,5 +13,8 @@ class DepthL1Loss(nn.Module):
             err_pos = self.inbalance_to_closer * err[err>0]
             err_neg = -err[err<0]
             total_num = err.numel() # mask.sum().to(dtype=torch.float32)+1e-8
-            d = (err_pos.sum() + err_neg.sum()) / total_num
+            if total_num > 0:
+                d = (err_pos.sum() + err_neg.sum()) / total_num
+            else:
+                d = 0
         return d
