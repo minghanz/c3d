@@ -13,7 +13,8 @@ torch::Tensor cvo_dense_samp_cuda_forward(
     float ell, 
     bool ignore_ib, 
     bool sqr,
-    float ell_basedist
+    float ell_basedist, 
+    bool return_pdf
     );
 
 std::vector<torch::Tensor> cvo_dense_samp_cuda_backward(
@@ -26,7 +27,8 @@ std::vector<torch::Tensor> cvo_dense_samp_cuda_backward(
     float ell,
     bool ignore_ib, 
     bool sqr,
-    float ell_basedist);
+    float ell_basedist, 
+    bool return_pdf);
 
 // C++ interface
 
@@ -44,13 +46,14 @@ torch::Tensor cvo_dense_samp_forward(
     float ell,
     bool ignore_ib, 
     bool sqr,
-    float ell_basedist) {
+    float ell_basedist, 
+    bool return_pdf) {
   CHECK_INPUT(pts);
   CHECK_INPUT(pts_info);
   CHECK_INPUT(grid_source);
   CHECK_INPUT(grid_valid);
 
-  return cvo_dense_samp_cuda_forward(pts, pts_info, grid_source, grid_valid, neighbor_range, ell, ignore_ib, sqr, ell_basedist);
+  return cvo_dense_samp_cuda_forward(pts, pts_info, grid_source, grid_valid, neighbor_range, ell, ignore_ib, sqr, ell_basedist, return_pdf);
 }
 
 std::vector<torch::Tensor> cvo_dense_samp_backward(
@@ -63,14 +66,15 @@ std::vector<torch::Tensor> cvo_dense_samp_backward(
     float ell,
     bool ignore_ib,
     bool sqr,
-    float ell_basedist) {
+    float ell_basedist, 
+    bool return_pdf) {
   CHECK_INPUT(dy);
   CHECK_INPUT(pts);
   CHECK_INPUT(pts_info);
   CHECK_INPUT(grid_source);
   CHECK_INPUT(grid_valid);
 
-  return cvo_dense_samp_cuda_backward(dy, pts, pts_info, grid_source, grid_valid, neighbor_range, ell, ignore_ib, sqr, ell_basedist);
+  return cvo_dense_samp_cuda_backward(dy, pts, pts_info, grid_source, grid_valid, neighbor_range, ell, ignore_ib, sqr, ell_basedist, return_pdf);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

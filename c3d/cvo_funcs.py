@@ -53,14 +53,17 @@ from monodepth2/cvo_utils.py
 # import cvo_dense_with_normal_output
 
 class PtSampleInGridSigma(Function):
+    """This is for calculating c3d loss for 2D points with covariance matrix for each flat point. 
+    """
     @staticmethod
-    def forward(ctx, pts, pts_info, pts_ells, grid_source, grid_valid, neighbor_range, ignore_ib=False):
-        """ pts: B*2*N, pts_info: B*C*N, grid_source: B*C*H*W (C could be xyz, rgb, ...), grid_valid: B*1*H*W, neighbor_range: int
+    def forward(ctx, pts, pts_info, pts_ells, grid_source, grid_valid, neighbor_range, ignore_ib=False, return_pdf=False):
+        """ pts: 1*3*N (3 is u,v,b), pts_info: 1*2*N, pts_ells: 1*4*N (4 is sigma_x, sigma_y, rho_xy, weight), grid_source: B*2*H*W (2 is x and y), grid_valid: B*1*H*W, neighbor_range: int
         """
-        outputs = cvo_dense_Sigma.forward(pts, pts_info, pts_ells, grid_source, grid_valid, neighbor_range, ignore_ib)
+        outputs = cvo_dense_Sigma.forward(pts, pts_info, pts_ells, grid_source, grid_valid, neighbor_range, ignore_ib, return_pdf)
         ctx.save_for_backward(pts, pts_info, pts_ells, grid_source, grid_valid)
         ctx.neighbor_range = neighbor_range
         ctx.ignore_ib = ignore_ib
+        ctx.return_pdf = return_pdf
         return outputs
 
     @staticmethod
@@ -68,18 +71,21 @@ class PtSampleInGridSigma(Function):
         # outputs, pts, pts_info, grid_source, grid_valid = ctx.saved_tensors
         pts, pts_info, pts_ells, grid_source, grid_valid = ctx.saved_tensors
         dy = dy.contiguous()
-        dx1, dx2, dells = cvo_dense_Sigma.backward(dy, pts, pts_info, pts_ells, grid_source, grid_valid, ctx.neighbor_range, ctx.ignore_ib)
-        return None, dx1, dells, dx2, None, None, None
+        dx1, dx2, dells = cvo_dense_Sigma.backward(dy, pts, pts_info, pts_ells, grid_source, grid_valid, ctx.neighbor_range, ctx.ignore_ib, ctx.return_pdf)
+        return None, dx1, dells, dx2, None, None, None, None
 
 class PtSampleInGridSigmaGrid(Function):
+    """This is for calculating c3d loss for 2D points with covariance matrix for each grid point. 
+    """
     @staticmethod
-    def forward(ctx, pts, pts_info, grid_ells, grid_source, grid_valid, neighbor_range, ignore_ib=False):
-        """ pts: B*2*N, pts_info: B*C*N, grid_source: B*C*H*W (C could be xyz, rgb, ...), grid_valid: B*1*H*W, neighbor_range: int
+    def forward(ctx, pts, pts_info, grid_ells, grid_source, grid_valid, neighbor_range, ignore_ib=False, return_pdf=False):
+        """ pts: 1*3*N (3 is u,v,b), pts_info: 1*2*N, grid_ells: B*4*N (4 is sigma_x, sigma_y, rho_xy, weight), grid_source: B*2*H*W (2 is x and y), grid_valid: B*1*H*W, neighbor_range: int
         """
-        outputs = cvo_dense_Sigma_grid.forward(pts, pts_info, grid_ells, grid_source, grid_valid, neighbor_range, ignore_ib)
+        outputs = cvo_dense_Sigma_grid.forward(pts, pts_info, grid_ells, grid_source, grid_valid, neighbor_range, ignore_ib, return_pdf)
         ctx.save_for_backward(pts, pts_info, grid_ells, grid_source, grid_valid)
         ctx.neighbor_range = neighbor_range
         ctx.ignore_ib = ignore_ib
+        ctx.return_pdf = return_pdf
         return outputs
 
     @staticmethod
@@ -87,8 +93,8 @@ class PtSampleInGridSigmaGrid(Function):
         # outputs, pts, pts_info, grid_source, grid_valid = ctx.saved_tensors
         pts, pts_info, grid_ells, grid_source, grid_valid = ctx.saved_tensors
         dy = dy.contiguous()
-        dx1, dx2, dells = cvo_dense_Sigma_grid.backward(dy, pts, pts_info, grid_ells, grid_source, grid_valid, ctx.neighbor_range, ctx.ignore_ib)
-        return None, dx1, dells, dx2, None, None, None
+        dx1, dx2, dells = cvo_dense_Sigma_grid.backward(dy, pts, pts_info, grid_ells, grid_source, grid_valid, ctx.neighbor_range, ctx.ignore_ib, ctx.return_pdf)
+        return None, dx1, dells, dx2, None, None, None, None
 
 # class PtSampleInGridSigmaMuGrid(Function):
 #     @staticmethod
@@ -111,10 +117,12 @@ class PtSampleInGridSigmaGrid(Function):
         
 class PtSampleInGrid(Function):
     @staticmethod
-    def forward(ctx, pts, pts_info, grid_source, grid_valid, neighbor_range, ell, ignore_ib=False, sqr=True, ell_basedist=0):
-        """ pts: B*2*N, pts_info: B*C*N, grid_source: B*C*H*W (C could be xyz, rgb, ...), grid_valid: B*1*H*W, neighbor_range: int
+    def forward(ctx, pts, pts_info, grid_source, grid_valid, neighbor_range, ell, ignore_ib=False, sqr=True, ell_basedist=0, return_pdf=False):
+        """ pts: 1*3*N (3 is u,v,b), pts_info: 1*C*N, grid_source: B*C*H*W (C could be xyz, rgb, ...), grid_valid: B*1*H*W, neighbor_range: int
+        return_pdf: if True, return pdf except sqrt((2pi)^k) constant, otherwise only the exp part (exponential kernel). Default false. Only valid if sqr is True. 
         """
-        outputs = cvo_dense_samp.forward(pts, pts_info, grid_source, grid_valid, neighbor_range, ell, ignore_ib, sqr, ell_basedist)
+        assert not (return_pdf and not sqr), "return_pdf is valid only when sqr is True"
+        outputs = cvo_dense_samp.forward(pts, pts_info, grid_source, grid_valid, neighbor_range, ell, ignore_ib, sqr, ell_basedist, return_pdf)
         # ctx.save_for_backward(outputs, pts, pts_info, grid_source, grid_valid)
         ctx.save_for_backward(pts, pts_info, grid_source, grid_valid)
         ctx.neighbor_range = neighbor_range
@@ -122,6 +130,7 @@ class PtSampleInGrid(Function):
         ctx.ignore_ib = ignore_ib
         ctx.sqr = sqr
         ctx.ell_basedist = ell_basedist
+        ctx.return_pdf = return_pdf
         return outputs
     # def forward(ctx, pts, pts_info, grid_source, grid_valid, neighbor_range, ell, ignore_ib=False, sqr=True, ell_basedist=0):
     #     """ pts: B*2*N, pts_info: B*C*N, grid_source: B*C*H*W (C could be xyz, rgb, ...), grid_valid: B*1*H*W, neighbor_range: int
@@ -143,8 +152,8 @@ class PtSampleInGrid(Function):
         pts, pts_info, grid_source, grid_valid = ctx.saved_tensors
         dy = dy.contiguous()
         # dx1, dx2 = cvo_dense_samp.backward(dy, outputs, pts, pts_info, grid_source, grid_valid, ctx.neighbor_range, ctx.ell, ctx.ignore_ib)
-        dx1, dx2 = cvo_dense_samp.backward(dy, pts, pts_info, grid_source, grid_valid, ctx.neighbor_range, ctx.ell, ctx.ignore_ib, ctx.sqr, ctx.ell_basedist)
-        return None, dx1, dx2, None, None, None, None, None, None
+        dx1, dx2 = cvo_dense_samp.backward(dy, pts, pts_info, grid_source, grid_valid, ctx.neighbor_range, ctx.ell, ctx.ignore_ib, ctx.sqr, ctx.ell_basedist, ctx.return_pdf)
+        return None, dx1, dx2, None, None, None, None, None, None, None
     # def backward(ctx, dy): ## dummy version for memory leak debug
     #     # outputs, pts, pts_info, grid_source, grid_valid = ctx.saved_tensors
     #     pts, pts_info, grid_source, grid_valid = ctx.saved_tensors

@@ -18,6 +18,7 @@ __global__ void cvo_dense_Sigma_grid_cuda_forward_kernel(
     const torch::PackedTensorAccessor<bool,4,torch::RestrictPtrTraits,size_t> grid_valid,
     const int neighbor_range, 
     const bool ignore_ib, 
+    const bool return_pdf, 
     torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> y) {
 
   const auto N = pts.size(2);
@@ -79,7 +80,12 @@ __global__ void cvo_dense_Sigma_grid_cuda_forward_kernel(
         if (C == 3){
           dz = pts_info[0][2][in] - grid_source[ib][2][v+innh][u+innw];
         }
-        y[0][blockIdx.y][in] = det_neghalf * exp(-0.5 * (dx * dx * inv_xx + dy * dy * inv_yy + 2 * dx * dy * inv_xy)) * weight;
+        if (return_pdf){
+          y[0][blockIdx.y][in] = det_neghalf * exp(-0.5 * (dx * dx * inv_xx + dy * dy * inv_yy + 2 * dx * dy * inv_xy)) * weight;
+        }
+        else{
+          y[0][blockIdx.y][in] = exp(-0.5 * (dx * dx * inv_xx + dy * dy * inv_yy + 2 * dx * dy * inv_xy)) * weight;
+        }
         
       }
     }
@@ -100,6 +106,7 @@ __global__ void cvo_dense_Sigma_grid_cuda_backward_kernel(
   const torch::PackedTensorAccessor<bool,4,torch::RestrictPtrTraits,size_t> grid_valid,
   const int neighbor_range, 
   const bool ignore_ib, 
+  const bool return_pdf, 
   const int inn) {
   // dx1: 1*C*N
   // dx2: B*C*H*W
@@ -167,7 +174,10 @@ __global__ void cvo_dense_Sigma_grid_cuda_backward_kernel(
             d_z = pts_info[0][2][in] - grid_source[ib][2][v+innh][u+innw];
           }
           float res_exp = exp(-0.5 * (d_x * d_x * inv_xx + d_y * d_y * inv_yy + 2 * d_x * d_y * inv_xy) );
-          float res = det_neghalf * res_exp * weight;
+          float res = res_exp * weight;
+          if (return_pdf){
+            res = res * det_neghalf;
+          }
 
           float res_dx_pts = - res * ( inv_xx * d_x + inv_xy * d_y );
           float res_dy_pts = - res * ( inv_xy * d_x + inv_yy * d_y );
@@ -198,16 +208,31 @@ __global__ void cvo_dense_Sigma_grid_cuda_backward_kernel(
           float dinv_xy_dsigma_y = (- rho_xy * sigma_x * det - rho_xy * sigma_x * sigma_y * ddet_dsigma_y) / (det*det);
           float dinv_xy_drho_xy = (- sigma_x * sigma_y * det - rho_xy * sigma_x * sigma_y * ddet_drho_xy) / (det*det);
 
-          float res_dsigma_x = res_exp * weight * ddet_neghalf_ddet * ddet_dsigma_x + \
-                                res_dinv_xx * dinv_xx_dsigma_x + res_dinv_yy * dinv_yy_dsigma_x + res_dinv_xy * dinv_xy_dsigma_x;
+          // float res_dsigma_x = res_exp * weight * ddet_neghalf_ddet * ddet_dsigma_x + \
+          //                       res_dinv_xx * dinv_xx_dsigma_x + res_dinv_yy * dinv_yy_dsigma_x + res_dinv_xy * dinv_xy_dsigma_x;
           
-          float res_dsigma_y = res_exp * weight * ddet_neghalf_ddet * ddet_dsigma_y + \
-                                res_dinv_xx * dinv_xx_dsigma_y + res_dinv_yy * dinv_yy_dsigma_y + res_dinv_xy * dinv_xy_dsigma_y;
+          // float res_dsigma_y = res_exp * weight * ddet_neghalf_ddet * ddet_dsigma_y + \
+          //                       res_dinv_xx * dinv_xx_dsigma_y + res_dinv_yy * dinv_yy_dsigma_y + res_dinv_xy * dinv_xy_dsigma_y;
 
-          float res_drho_xy = res_exp * weight * ddet_neghalf_ddet * ddet_drho_xy + \
-                                res_dinv_xx * dinv_xx_drho_xy + res_dinv_yy * dinv_yy_drho_xy + res_dinv_xy * dinv_xy_drho_xy;
+          // float res_drho_xy = res_exp * weight * ddet_neghalf_ddet * ddet_drho_xy + \
+          //                       res_dinv_xx * dinv_xx_drho_xy + res_dinv_yy * dinv_yy_drho_xy + res_dinv_xy * dinv_xy_drho_xy;
 
-          float res_dweight = det_neghalf * res_exp;
+          // float res_dweight = det_neghalf * res_exp;
+
+          float res_dsigma_x = res_dinv_xx * dinv_xx_dsigma_x + res_dinv_yy * dinv_yy_dsigma_x + res_dinv_xy * dinv_xy_dsigma_x;
+          
+          float res_dsigma_y = res_dinv_xx * dinv_xx_dsigma_y + res_dinv_yy * dinv_yy_dsigma_y + res_dinv_xy * dinv_xy_dsigma_y;
+
+          float res_drho_xy = res_dinv_xx * dinv_xx_drho_xy + res_dinv_yy * dinv_yy_drho_xy + res_dinv_xy * dinv_xy_drho_xy;
+
+          float res_dweight = res_exp;
+
+          if (return_pdf){
+            res_dsigma_x += res_exp * weight * ddet_neghalf_ddet * ddet_dsigma_x;
+            res_dsigma_y += res_exp * weight * ddet_neghalf_ddet * ddet_dsigma_y;
+            res_drho_xy += res_exp * weight * ddet_neghalf_ddet * ddet_drho_xy;
+            res_dweight *= det_neghalf;
+          }
 
           dgrid_ells[ib][0][v+innh][u+innw] += dy[0][inn][in] * res_dsigma_x;
           dgrid_ells[ib][1][v+innh][u+innw] += dy[0][inn][in] * res_dsigma_y;
@@ -230,7 +255,8 @@ torch::Tensor cvo_dense_Sigma_grid_cuda_forward(
     torch::Tensor grid_source, 
     torch::Tensor grid_valid, 
     int neighbor_range,
-    bool ignore_ib
+    bool ignore_ib, 
+    bool return_pdf
     ) {
     // pts: 1*2*N, pts_info: 1*C*N, grid_source: B*C*H*W (C could be xyz, rgb, ...), 
     // grid_valid: B*1*H*W, neighbor_range: int
@@ -267,6 +293,7 @@ torch::Tensor cvo_dense_Sigma_grid_cuda_forward(
       grid_valid.packed_accessor<bool,4,torch::RestrictPtrTraits,size_t>(),
       neighbor_range, 
       ignore_ib,
+      return_pdf, 
       y.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>());
   }));
   cudaDeviceSynchronize();
@@ -283,7 +310,8 @@ std::vector<torch::Tensor> cvo_dense_Sigma_grid_cuda_backward(
     torch::Tensor grid_source, 
     torch::Tensor grid_valid, 
     int neighbor_range,
-    bool ignore_ib
+    bool ignore_ib, 
+    bool return_pdf
     ) {
 
   // dy: 1*NN*N
@@ -321,6 +349,7 @@ std::vector<torch::Tensor> cvo_dense_Sigma_grid_cuda_backward(
         grid_valid.packed_accessor<bool,4,torch::RestrictPtrTraits,size_t>(),
         neighbor_range, 
         ignore_ib, 
+        return_pdf, 
         inn);
     }));
     cudaDeviceSynchronize();  

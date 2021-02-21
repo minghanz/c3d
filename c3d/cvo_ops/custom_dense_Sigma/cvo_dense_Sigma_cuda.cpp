@@ -11,7 +11,8 @@ torch::Tensor cvo_dense_Sigma_cuda_forward(
     torch::Tensor grid_source, 
     torch::Tensor grid_valid, 
     int neighbor_range, 
-    bool ignore_ib
+    bool ignore_ib, 
+    bool return_pdf
     );
 
 std::vector<torch::Tensor> cvo_dense_Sigma_cuda_backward(
@@ -22,7 +23,8 @@ std::vector<torch::Tensor> cvo_dense_Sigma_cuda_backward(
     torch::Tensor grid_source, 
     torch::Tensor grid_valid, 
     int neighbor_range, 
-    bool ignore_ib
+    bool ignore_ib, 
+    bool return_pdf
     );
 
 // C++ interface
@@ -39,7 +41,8 @@ torch::Tensor cvo_dense_Sigma_forward(
     torch::Tensor grid_source, 
     torch::Tensor grid_valid, 
     int neighbor_range, 
-    bool ignore_ib
+    bool ignore_ib, 
+    bool return_pdf
     ) {
   CHECK_INPUT(pts);
   CHECK_INPUT(pts_info);
@@ -47,7 +50,7 @@ torch::Tensor cvo_dense_Sigma_forward(
   CHECK_INPUT(grid_source);
   CHECK_INPUT(grid_valid);
 
-  return cvo_dense_Sigma_cuda_forward(pts, pts_info, pts_ells, grid_source, grid_valid, neighbor_range, ignore_ib);
+  return cvo_dense_Sigma_cuda_forward(pts, pts_info, pts_ells, grid_source, grid_valid, neighbor_range, ignore_ib, return_pdf);
 }
 
 std::vector<torch::Tensor> cvo_dense_Sigma_backward(
@@ -58,7 +61,8 @@ std::vector<torch::Tensor> cvo_dense_Sigma_backward(
     torch::Tensor grid_source, 
     torch::Tensor grid_valid, 
     int neighbor_range, 
-    bool ignore_ib
+    bool ignore_ib, 
+    bool return_pdf
     ) {
   CHECK_INPUT(dy);
   CHECK_INPUT(pts);
@@ -67,7 +71,7 @@ std::vector<torch::Tensor> cvo_dense_Sigma_backward(
   CHECK_INPUT(grid_source);
   CHECK_INPUT(grid_valid);
 
-  return cvo_dense_Sigma_cuda_backward(dy, pts, pts_info, pts_ells, grid_source, grid_valid, neighbor_range, ignore_ib);
+  return cvo_dense_Sigma_cuda_backward(dy, pts, pts_info, pts_ells, grid_source, grid_valid, neighbor_range, ignore_ib, return_pdf);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

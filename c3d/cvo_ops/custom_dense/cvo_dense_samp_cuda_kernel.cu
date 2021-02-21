@@ -20,7 +20,8 @@ __global__ void cvo_dense_samp_cuda_forward_kernel(
     const bool ignore_ib, 
     const bool sqr,
     const float ell_basedist, 
-    torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> y) {
+    torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> y, 
+    const bool return_pdf) {
 
   const auto N = pts.size(2);
   const auto C = pts_info.size(1);
@@ -61,7 +62,12 @@ __global__ void cvo_dense_samp_cuda_forward_kernel(
           d_cur += (pts_info[0][ic][in] - grid_source[ib][ic][v+innh][u+innw]) * (pts_info[0][ic][in] - grid_source[ib][ic][v+innh][u+innw]);
         }
         if (sqr){
-          y[0][blockIdx.y][in] = exp( - d_cur / (2*ell_apply*ell_apply) ) ;
+          if (return_pdf){
+            y[0][blockIdx.y][in] = exp( - d_cur / (2*ell_apply*ell_apply) ) / ell_apply / ell_apply ;
+          }
+          else{
+            y[0][blockIdx.y][in] = exp( - d_cur / (2*ell_apply*ell_apply) ) ;
+          }
         }
         else{
           y[0][blockIdx.y][in] = exp( - sqrt(d_cur+1e-8) / ell_apply ) ;
@@ -89,7 +95,8 @@ __global__ void cvo_dense_samp_cuda_backward_kernel_sqr_only(
   const bool ignore_ib, 
   const bool sqr,
   const float ell_basedist, 
-  const int inn) {
+  const int inn, 
+  const bool return_pdf) {
   // dx1: 1*C*N
   // dx2: B*C*H*W
   // dy: 1*NN*N
@@ -129,7 +136,7 @@ __global__ void cvo_dense_samp_cuda_backward_kernel_sqr_only(
           else{
             ell_apply = ell;
           }
-
+          // effect of return_pdf is included in y, therefore no need to process separately
           dx1[0][blockIdx.y][in] += dy[0][inn][in] * y[0][inn][in] * (grid_source[ib][blockIdx.y][v+innh][u+innw] - pts_info[0][blockIdx.y][in]) / (ell_apply*ell_apply);
           dx2[ib][blockIdx.y][v+innh][u+innw] -= dy[0][inn][in] * y[0][inn][in] * (grid_source[ib][blockIdx.y][v+innh][u+innw] - pts_info[0][blockIdx.y][in]) / (ell_apply*ell_apply);
         }
@@ -153,7 +160,8 @@ __global__ void cvo_dense_samp_cuda_backward_kernel(
   const bool ignore_ib, 
   const bool sqr,
   const float ell_basedist, 
-  const int inn) {
+  const int inn, 
+  const bool return_pdf) {
   // dx1: 1*C*N
   // dx2: B*C*H*W
   // dy: 1*NN*N
@@ -202,6 +210,9 @@ __global__ void cvo_dense_samp_cuda_backward_kernel(
           float y_cur;
           if (sqr){
             y_cur = exp( - d_cur / (2*ell_apply*ell_apply) );
+            if (return_pdf){
+              y_cur = y_cur / ell_apply / ell_apply;
+            }
             for (int ic = 0; ic < C; ic++){
               dx1[0][ic][in] += dy[0][inn][in] * y_cur * (grid_source[ib][ic][v+innh][u+innw] - pts_info[0][ic][in]) / (ell_apply*ell_apply);
               dx2[ib][ic][v+innh][u+innw] -= dy[0][inn][in] * y_cur * (grid_source[ib][ic][v+innh][u+innw] - pts_info[0][ic][in]) / (ell_apply*ell_apply);
@@ -234,7 +245,8 @@ torch::Tensor cvo_dense_samp_cuda_forward(
     float ell, 
     bool ignore_ib, 
     bool sqr,
-    float ell_basedist
+    float ell_basedist, 
+    bool return_pdf
     ) {
     // pts: 1*2*N, pts_info: 1*C*N, grid_source: B*C*H*W (C could be xyz, rgb, ...), 
     // grid_valid: B*1*H*W, neighbor_range: int
@@ -273,7 +285,8 @@ torch::Tensor cvo_dense_samp_cuda_forward(
       ignore_ib,
       sqr,
       ell_basedist, 
-      y.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>());
+      y.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(), 
+      return_pdf);
   }));
   cudaDeviceSynchronize();
 
@@ -291,7 +304,8 @@ std::vector<torch::Tensor> cvo_dense_samp_cuda_backward(
     float ell, 
     bool ignore_ib, 
     bool sqr,
-    float ell_basedist
+    float ell_basedist, 
+    bool return_pdf
     ) {
 
   // dy: 1*NN*N
@@ -346,7 +360,8 @@ std::vector<torch::Tensor> cvo_dense_samp_cuda_backward(
         ignore_ib, 
         sqr,
         ell_basedist, 
-        inn);
+        inn, 
+        return_pdf);
     }));
     cudaDeviceSynchronize();  
   }

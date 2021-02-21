@@ -884,7 +884,7 @@ class C3DLoss(nn.Module):
                 # ell = Ellipse(xy=(pts[ib][ip, 1], -pts[ib][ip, 0] + grid_h), width=3, height=1, angle=- 90)
                 ell = Ellipse(xy=(x0, -y0 + grid_h), width=e1, height=e2, angle=angle - 90) # - 90
                 # ell = Ellipse(xy=pts[ib][ip], width=3, height=3, angle=angle)
-                alpha = weight / det
+                alpha = weight / np.sqrt(det)       # the area is proportional to sqrt of determinant (~sigma_x*sigma_y). area with the same weight should be more solid (larger alpha) with smaller area 
 
                 ells.append(ell)
                 alphas.append(alpha)
@@ -933,12 +933,95 @@ class C3DLoss(nn.Module):
         return buffs
 
 
-    def forward_2D(self, grid_h, grid_w, pts_1_raw, pts_ells_1, pts_2, pts_ells_2=None, vis=False, mu=False):
+    def forward_2D_self_eval(self, grid_h, grid_w, pts_2, pts_ell, per_point=False, return_pdf=True):
+        """This function is to evaluate the value of the continuous function at the same points which formed the function. 
+        The results are to be used as regression target, so that another function formed by downsampled or weighted points should regress to the same values at these points. 
+        """
+        if isinstance(pts_2, torch.Tensor):
+            pts_2 = [pts_2[i] for i in range(pts_2.shape[0])]
+
+        ### number of points in each point cloud in the batch
+        n_pts_2 = [None] * len(pts_2)
+        ### preserve the x y dim
+        for ib in range(len(pts_2)):
+            pts_2[ib] = pts_2[ib][:, :2]
+            n_pts_2[ib] = pts_2[ib].shape[0]
+
+        ### construct ells (need to normalize to the number of points in each point cloud)
+        pts_ells_2 = [None] * len(pts_2)
+        for ib in range(len(pts_2)):
+            sigma_x = torch.ones_like(pts_2[ib][:,0]) * pts_ell
+            sigma_y = torch.ones_like(sigma_x) * pts_ell
+            rho_xy = torch.zeros_like(sigma_x)
+            weight = torch.ones_like(sigma_x) / n_pts_2[ib]     # normalize
+            pts_ells_2[ib] = torch.stack([sigma_x, sigma_y, rho_xy, weight], dim=0) # 4*N
+        
+        ### construct uvb for pts_2
+        pts_uvb_2 = []
+        for ib in range(len(pts_2)):
+            pts_uv_2_ib = pts_2[ib].round().to(dtype=int)
+            pts_uvb_2_ib = torch.cat([pts_uv_2_ib, torch.ones_like(pts_uv_2_ib[:,[0]])*ib], dim=1)  # N*3 
+            pts_uvb_2.append(pts_uvb_2_ib)
+        pts_uvb_cat_2 = torch.cat(pts_uvb_2, dim=0)  # BigN * 3
+        pts_uvb_cat_2_split = torch.split(pts_uvb_cat_2, 1, 1)
+        pts_uvb_cat_2 = pts_uvb_cat_2.transpose(0,1).unsqueeze(0)   # 1*3*N
+
+        ### flattening pts_2
+        pts_cat_2 = torch.cat(pts_2, dim=0).transpose(0,1).unsqueeze(0)             # 1*2*N
+        pts_cat_2 = pts_cat_2[:,:2]
+        # if pts_ells_2 is not None:
+        #     pts_ells_cat_2 = torch.cat(pts_ells_2, dim=1).unsqueeze(0)   # 1*4*N
+        
+        ### griding pts_2
+        grid_shape = (len(pts_2), 2, grid_h, grid_w)
+        pts_grid_2 = grid_from_concat_flat_func(pts_uvb_cat_2_split, pts_cat_2, grid_shape)
+
+        mask_cat_2 = torch.ones_like(pts_cat_2[:,[0]]).to(dtype=torch.bool)
+        grid_mask_shape = (len(pts_2), 1, grid_h, grid_w)
+        mask_grid_2 = grid_from_concat_flat_func(pts_uvb_cat_2_split, mask_cat_2, grid_mask_shape)
+
+        ### griding ells_2
+        pts_ells_cat_2 = torch.cat(pts_ells_2, dim=1).unsqueeze(0)   # 1*4*N
+        pts_ells_cat_2 = pts_ells_cat_2[:, :4]
+        grid_ells_shape = (len(pts_2), 4, grid_h, grid_w)
+        pts_ells_grid_2 = grid_from_concat_flat_func(pts_uvb_cat_2_split, pts_ells_cat_2, grid_ells_shape)
+
+        ### convert dtype
+        pts_uvb_cat_2 = pts_uvb_cat_2.float()
+
+        ### pts_2 is flat, pts_2 is grid (output 1*NN*N, where N is # of pts in flat) 
+        inp = PtSampleInGridSigmaGrid.apply(pts_uvb_cat_2.contiguous(), pts_cat_2.contiguous(), pts_ells_grid_2.contiguous(), pts_grid_2.contiguous(), mask_grid_2.contiguous(), self.opts.neighbor_range, False, return_pdf)
+        # inp = PtSampleInGrid.apply(pts_uvb_cat_2.contiguous(), pts_cat_2.contiguous(), pts_grid_2.contiguous(), mask_grid_2.contiguous(), self.opts.neighbor_range, pts_ell, False, True, 0, return_pdf)
+        inp = inp / (2*np.pi)
+
+        inp = inp.sum(dim=1)
+
+        if per_point:
+            return inp
+        else:    
+            ### select the covered points
+            inp = inp[inp>0]
+            # ### set a minimum for inp
+            # inp = torch.clamp(inp, min=1e-7)
+
+            ### harmonic mean
+            nel = inp.numel()
+            inp_sum = 1 / ((1 / inp).mean()) 
+            inp_sum = inp_sum * nel
+            # ### log likelihood
+            # inp_sum = torch.log(inp).sum()
+
+            return inp_sum
+
+
+    def forward_2D(self, grid_h, grid_w, pts_1_raw, pts_ells_1, pts_2, pts_ells_2=None, vis=False, mu=False, per_point=False, return_pdf=True):
         """
         This function is to conceptually implement a c3d function with covariance matrix for each point. 
+        (pts_1 is the sparse one with covariance matrix. pts_2 is dense and only has points, therefore we do not need pts_ells_2 here. )
         pts_1: a list of length B. Each element of the list is a tensor N*2 (or N*3 with z dim = 0). Each row is the coordinate of a point in 2D plane (image). 
         pts_ells_1: a list of length B. Each element of the list is a tensor 4*N. Each row is [sigma_x, sigma_y, rho_xy, weight] determining the covariance matrix of the corresponding point. 
-        Assume pts_1 is the sparse one with covariance matrix. pts_2 is dense and only has points, therefore we do not need pts_ells_2 here. 
+        (if mu == True, Each row is [sigma_x, sigma_y, rho_xy, weight, mu_x, mu_y], indicating the center can have an offset from its original position, which makes pts_1 potentially different from pts_1_raw)
+        per_point: if True, return the function value at each evaluated point (pts_2), otherwise return the sum. 
         """
         ### convert to list in case the input pts is a batched tensor
 
@@ -958,10 +1041,12 @@ class C3DLoss(nn.Module):
         if vis:
             img_buffs = self.vis_pts_2D(pts_1_raw, pts_ells_1, grid_h, grid_w, pts_2, mu=mu)
 
+        ### preserve the x y dim
         for ib in range(len(pts_1_raw)):
             pts_1_raw[ib] = pts_1_raw[ib][:, :2]
             pts_2[ib] = pts_2[ib][:, :2]
 
+        ### if predicting offset, construct new pts_1
         pts_1 = [None] * len(pts_1_raw)
         if mu:
             for ib in range(len(pts_1)):
@@ -973,6 +1058,7 @@ class C3DLoss(nn.Module):
             for ib in range(len(pts_1)):
                 pts_1[ib] = pts_1_raw[ib]
 
+        ### construct uvb for pts_1
         pts_uvb_1 = []
         for ib in range(len(pts_1)):
             pts_uv_1_ib = pts_1[ib].round().to(dtype=int)
@@ -982,6 +1068,7 @@ class C3DLoss(nn.Module):
         pts_uvb_cat_1_split = torch.split(pts_uvb_cat_1, 1, 1)
         pts_uvb_cat_1 = pts_uvb_cat_1.transpose(0,1).unsqueeze(0)   # 1*3*N
 
+        ### construct uvb for pts_2
         pts_uvb_2 = []
         for ib in range(len(pts_2)):
             pts_uv_2_ib = pts_2[ib].round().to(dtype=int)
@@ -991,10 +1078,13 @@ class C3DLoss(nn.Module):
         pts_uvb_cat_2_split = torch.split(pts_uvb_cat_2, 1, 1)
         pts_uvb_cat_2 = pts_uvb_cat_2.transpose(0,1).unsqueeze(0)   # 1*3*N
 
+        ### flattening pts_1
         pts_cat_1 = torch.cat(pts_1, dim=0).transpose(0,1).unsqueeze(0)             # 1*2*N
         pts_cat_1 = pts_cat_1[:,:2]
         pts_ells_cat_1 = torch.cat(pts_ells_1, dim=1).unsqueeze(0)   # 1*4*N
         pts_ells_cat_1 = pts_ells_cat_1[:, :4]
+
+        ### flattening pts_2
         pts_cat_2 = torch.cat(pts_2, dim=0).transpose(0,1).unsqueeze(0)             # 1*2*N
         pts_cat_2 = pts_cat_2[:,:2]
         if pts_ells_2 is not None:
@@ -1023,10 +1113,10 @@ class C3DLoss(nn.Module):
         pts_uvb_cat_1 = pts_uvb_cat_1.float()
         pts_uvb_cat_2 = pts_uvb_cat_2.float()
 
-        # ### center at pts_1
-        # inp = PtSampleInGridSigma.apply(pts_uvb_cat_1.contiguous(), pts_cat_1.contiguous(), pts_ells_cat_1.contiguous(), pts_grid_2.contiguous(), mask_grid_2.contiguous(), self.opts.neighbor_range, False)
+        # ### pts_1 is flat, pts_2 is grid (output 1*NN*N, where N is # of pts in flat)
+        # inp = PtSampleInGridSigma.apply(pts_uvb_cat_1.contiguous(), pts_cat_1.contiguous(), pts_ells_cat_1.contiguous(), pts_grid_2.contiguous(), mask_grid_2.contiguous(), self.opts.neighbor_range, False, return_pdf)
 
-        # ### center at pts_1
+        # ### pts_1 is flat, pts_2 is grid (output 1*NN*N, where N is # of pts in flat)
         # # inp_sum = inp.sum()
         # # print("inp", inp.min(), inp.max(), inp.mean())
         # # print("original", inp.numel())
@@ -1043,8 +1133,8 @@ class C3DLoss(nn.Module):
 
         
 
-        ### center at pts_2
-        inp = PtSampleInGridSigmaGrid.apply(pts_uvb_cat_2.contiguous(), pts_cat_2.contiguous(), pts_ells_grid_1.contiguous(), pts_grid_1.contiguous(), mask_grid_1.contiguous(), self.opts.neighbor_range, False)
+        ### pts_2 is flat, pts_1 is grid (output 1*NN*N, where N is # of pts in flat)
+        inp = PtSampleInGridSigmaGrid.apply(pts_uvb_cat_2.contiguous(), pts_cat_2.contiguous(), pts_ells_grid_1.contiguous(), pts_grid_1.contiguous(), mask_grid_1.contiguous(), self.opts.neighbor_range, False, return_pdf)
         inp = inp / (2*np.pi)
 
         # print("before", inp.shape)
@@ -1054,19 +1144,22 @@ class C3DLoss(nn.Module):
         # print("after", inp.shape)
         # print("inp min max", inp.min(), inp.max())
 
-        ### select the covered points
-        inp = inp[inp>0]
-        # ### set a minimum for inp
-        # inp = torch.clamp(inp, min=1e-7)
+        if per_point:
+            return inp, img_buffs
+        else:    
+            ### select the covered points
+            inp = inp[inp>0]
+            # ### set a minimum for inp
+            # inp = torch.clamp(inp, min=1e-7)
 
-        ### harmonic mean
-        nel = inp.numel()
-        inp_sum = 1 / ((1 / inp).mean()) 
-        inp_sum = inp_sum * nel
-        # ### log likelihood
-        # inp_sum = torch.log(inp).sum()
+            ### harmonic mean
+            nel = inp.numel()
+            inp_sum = 1 / ((1 / inp).mean()) 
+            inp_sum = inp_sum * nel
+            # ### log likelihood
+            # inp_sum = torch.log(inp).sum()
 
-        return inp_sum, img_buffs
+            return inp_sum, img_buffs
 
     # @torchsnooper.snoop()
     def forward_with_flow(self, depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname, debug_save_pcd=False):
