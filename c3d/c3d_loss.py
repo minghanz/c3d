@@ -470,9 +470,12 @@ def flow_pc3d(pcl_c3d, flow_grid, flow_mask_grid, K_cur, feat_comm_keys, use_nor
     return flow_pcl_c3d_flat, flow_pcl_c3d_grid
 
 class C3DLoss(nn.Module):
-    def __init__(self, seq_frame_n=1): # , flow_mode=False
+    def __init__(self, seq_frame_n=0): # , flow_mode=False
         super(C3DLoss, self).__init__()
-        self.seq_frame_n = seq_frame_n
+        self.seq_frame_n = seq_frame_n      
+        ### If seq_frame_n is not set (i.e. =0), it means that the target and source inputs are given separately (not mixed in a batch). 
+        ### Therefore use forward_with_flow(). Otherwise use forward_with_caminfo()
+        
         # self.flow_mode = flow_mode
 
         self.feat_inp_self = ["xyz", "hsv"]
@@ -591,12 +594,12 @@ class C3DLoss(nn.Module):
         """
         self.internal_count += 1
 
-        # if not self.flow_mode:
-        #     return self.forward_with_caminfo(rgb, depth, depth_gt, depth_mask, depth_gt_mask, nkern_fname, Ts, cam_info)
-        # else:
-        #     return self.forward_with_flow(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname)
+        if self.seq_frame_n != 0:
+            return self.forward_with_caminfo(rgb, depth, depth_gt, depth_mask, depth_gt_mask, nkern_fname, Ts, cam_info)
+        else:
+            return self.forward_with_flow(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname)
         
-        return self.forward_with_flow(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname)
+        # return self.forward_with_flow(depth_img_dict_1, depth_img_dict_2, flow_dict_1to2, flow_dict_2to1, cam_info, nkern_fname)
 
     def load_pc3d(self, depth_img_dict, cam_info):
         ## ---------------------------------
