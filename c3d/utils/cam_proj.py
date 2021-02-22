@@ -243,7 +243,8 @@ class CamProj(nn.Module):
             # self.intr_dict_key_levels = list(x for x in intr_dict_key0._fields if getattr(intr_dict_key0,x) is not None)
             # intr_dict = preload_K(data_root)
             for key in intr_dict:
-                self.cam_infos[key] = CamInfo(in_extr=intr_dict[key], batch_size=batch_size)
+                inex_list = [intr_dict[key]] * batch_size
+                self.cam_infos[key] = CamInfo_from_InExs(inex_list)
 
                 # uvb_grid, xy1_grid, self.width[key], self.height[key], K = set_from_intr(intr_dict[key].width, intr_dict[key].height, intr_dict[key].K_unit, batch_size)
                 # self.register_buffer("uvb_grid_{}_{}".format(key[0], key[1]), uvb_grid)

@@ -1269,10 +1269,10 @@ class C3DLoss(nn.Module):
         ## ---------------------------------
         depth_img_dict = {}
 
-        depth_img_dict["depth"] = depth
-        depth_img_dict["depth_mask"] = depth_mask
-        depth_img_dict["depth_gt"] = depth_gt
-        depth_img_dict["depth_gt_mask"] = depth_gt_mask
+        depth_img_dict["pred"] = depth
+        depth_img_dict["pred_mask"] = depth_mask
+        depth_img_dict["gt"] = depth_gt
+        depth_img_dict["gt_mask"] = depth_gt_mask
         depth_img_dict["rgb"] = rgb
 
         self.pc3ds = self.load_pc3d(depth_img_dict, cam_info)

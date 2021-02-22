@@ -28,7 +28,7 @@ class InExtr:
     #     elif isinstance(self.K, torch.Tensor):
     #         new_inex.K = self.K.clone()
 
-    def get_K(self, new_width=None, new_height=None, align_corner=None):
+    def get_K(self, new_width=None, new_height=None, align_corner=False):
         assert self.K is not None
         torch_mode = not isinstance(self.K, np.ndarray)
         if new_width is None and new_height is None and align_corner is None:
