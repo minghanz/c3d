@@ -274,7 +274,9 @@ class CamProj(nn.Module):
             cam_info_cur = self.cam_infos[key]
         else:
             assert intr is not None
-            cam_info_cur = CamInfo(in_extr=intr, batch_size=self.batch_size)
+            # cam_info_cur = CamInfo(in_extr=intr, batch_size=self.batch_size)
+            inex_list = [intr] * self.batch_size
+            cam_info_cur = CamInfo_from_InExs(inex_list)
 
         if xy_crop is not None:
             cam_info_cropped = cam_info_cur.crop(xy_crop)
