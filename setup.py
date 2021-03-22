@@ -31,10 +31,13 @@ if torch_version > 1.2:
 else:
     ######### for pytorch 1.2
     extra_compile_args = dict()
+
 # ### only needed for cluster if the compiler is too old (when nvcc found anaconda3/envs/tp36dup/gcc/libexec/gcc/x86_64-unknown-linux-gnu/5.2.0/cc1plus which cannot find libisl.so.10 which is needed)
-#     ### https://stackoverflow.com/questions/6622454/cuda-incompatible-with-my-gcc-version/6622751#6622751
-#     extra_compile_args['nvcc'] = ['--compiler-bindir', '/sw/arcts/centos7/gcc/8.2.0/bin/g++']
+# ### https://stackoverflow.com/questions/6622454/cuda-incompatible-with-my-gcc-version/6622751#6622751
 #     extra_compile_args['cxx'] = ['-std=c++11']
+#     extra_compile_args['nvcc'] = []
+
+# extra_compile_args['nvcc'] += ['--compiler-bindir', '/sw/arcts/centos7/gcc/8.2.0/bin/g++']
 
 # # extra_compile_args = dict()
 # os.environ["CC"] = "/sw/arcts/centos7/gcc/8.2.0/bin/gcc"
