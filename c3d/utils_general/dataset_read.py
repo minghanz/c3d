@@ -423,7 +423,7 @@ class DataReaderWaymo(DataReader):
         # K_unit = scale_K(cam_intr_normal, old_width=inex.width, old_height=inex.height, torch_mode=False, align_corner=self.align_corner)
 
         # inex.K_unit = K_unit
-        inex.K = K
+        inex.K = cam_intr_normal
 
         inex.P_cam_li = Tr_velo_to_cam
         inex.dist_coef = dist_coeff
@@ -507,7 +507,7 @@ class DataReaderVKITTI2(DataReader):
         # K_unit = scale_K(cam_intr_normal, old_width=inex.width, old_height=inex.height, torch_mode=False, align_corner=self.align_corner)
 
         # inex.K_unit = K_unit
-        inex.K = K
+        inex.K = cam_intr_normal
 
         inex.P_cam_li = np.eye(3,4)
         inex.dist_coef = np.zeros(5)
