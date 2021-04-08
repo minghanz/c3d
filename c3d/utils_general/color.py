@@ -148,12 +148,10 @@ def rgbmap(gray, mask_zeros=False, max_val=-1, min_val=0):
     Assuming input gray is 1D ndarray between [0,255]
     return is rgb between [0, 255]
     https://www.particleincell.com/2014/colormap/ 
+
+    This function returns 3 channels, from small input value to large, 
+    the output evolves from [255, 0, 0] to [0, 0, 255]
     """
-    # ##
-    # r = inten
-    # g = np.zeros_like(r)
-    # b = 255- inten
-    # ##
 
     if mask_zeros:
         valid_mask = gray>0
@@ -213,17 +211,17 @@ def rgbmap(gray, mask_zeros=False, max_val=-1, min_val=0):
     # r = (rgb[:,0] * gray).astype(int)
     # g = (rgb[:,1] * gray).astype(int)
     # b = (rgb[:,2] * gray).astype(int)
-    r = rgb[:,0].astype(int)
-    g = rgb[:,1].astype(int)
-    b = rgb[:,2].astype(int)
+    s = rgb[:,0].astype(int)
+    m = rgb[:,1].astype(int)
+    l = rgb[:,2].astype(int)
 
-    r = r.reshape(gray.shape)
-    g = g.reshape(gray.shape)
-    b = b.reshape(gray.shape)
+    s = s.reshape(gray.shape)
+    m = m.reshape(gray.shape)
+    l = l.reshape(gray.shape)
 
     if mask_zeros:
-        r[invalid_mask] = 0
-        g[invalid_mask] = 0
-        b[invalid_mask] = 0
+        s[invalid_mask] = 0
+        m[invalid_mask] = 0
+        l[invalid_mask] = 0
     
-    return r,g,b
+    return s,m,l

@@ -9,3 +9,4 @@ from .io import *
 from .pcl_funcs import *
 from .timing import *
 from .vis import *
+from .tensorboard_event import *

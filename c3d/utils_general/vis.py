@@ -195,12 +195,12 @@ def overlay_dep_on_rgb_np(dep_255, img_np, path=None, name=None, overlay=True):
     '''
     dep_mask = mask_from_dep_np(dep_255)
 
-    r, g, b = rgbmap(dep_255, mask_zeros=True)              # return int, shape the same as input. small->r, large->b
-    # dep_in_color = np.dstack((b, g, r))
-    dep_in_color = np.dstack((r, g, b))                     # small: b, large: r
+    s, m, l = rgbmap(dep_255, mask_zeros=True)              # return int, shape the same as input.
+    
+    dep_in_color = np.dstack((s, m, l))                     # for opencv, the channels are b, g, r. i.e., large is red. 
     dep_in_color = dep_in_color.astype(np.uint8)            # first channel: blue color, last: red
 
-    img_np = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+    img_np = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)        # reverse the opencv channel order. Now large is blue. 
     
     if not overlay:
         img_dep = cv2.add(img_np, dep_in_color)
